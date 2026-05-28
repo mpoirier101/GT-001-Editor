@@ -1,0 +1,29 @@
+name: build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore GT001.Editor.sln --configfile NuGet.Config
+
+      - name: Build
+        run: dotnet build GT001.Editor.sln --no-restore --configuration Release /p:UseSharedCompilation=false -m:1
+
+      - name: Test
+        run: dotnet test GT001.Editor.sln --no-build --configuration Release -m:1

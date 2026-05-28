@@ -1,0 +1,213 @@
+<Window
+    x:Class="GT001.Editor.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="GT-001 Editor">
+    <Grid x:Name="RootGrid" Background="{StaticResource AppBackground}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="250" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Margin="24,20,12,20" Background="#405069" BorderBrush="#657386" BorderThickness="1" CornerRadius="8" Padding="14">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <TextBlock Text="Patches" FontSize="20" FontWeight="SemiBold" />
+                <Grid Grid.Row="1" Margin="0,14,0,0" ColumnSpacing="6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="UserPatchesTabButton"
+                            Content="User"
+                            Click="PatchTab_Click"
+                            Tag="User"
+                            Padding="8,6"
+                            Margin="0"
+                            HorizontalAlignment="Stretch" />
+                    <Button x:Name="FactoryPatchesTabButton"
+                            Grid.Column="1"
+                            Content="Factory"
+                            Click="PatchTab_Click"
+                            Tag="Factory"
+                            Padding="8,6"
+                            Margin="0"
+                            HorizontalAlignment="Stretch" />
+                </Grid>
+                <ListBox x:Name="PatchList"
+                         Grid.Row="2"
+                         Margin="0,10,0,0"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         DisplayMemberPath="DisplayText"
+                         SelectedValuePath="Key"
+                         SelectionChanged="PatchList_SelectionChanged" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="12,20,24,20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="GT-001 Editor" FontSize="30" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center">
+                    <Button x:Name="WritePatchButton"
+                            Content="WRITE"
+                            Click="WritePatch_Click"
+                            Padding="12,6"
+                            Background="{StaticResource WarmBrush}" />
+                    <Button x:Name="ConnectionStatusButton"
+                            Content="Disconnected"
+                            Foreground="{StaticResource MutedTextBrush}"
+                            Background="{StaticResource PanelBackground}">
+                        <Button.Flyout>
+                            <Flyout Placement="Bottom">
+                                <StackPanel Width="320" Spacing="12">
+                                    <TextBlock Text="MIDI Connection" FontSize="18" FontWeight="SemiBold" />
+                                    <StackPanel>
+                                        <TextBlock Text="Input Port" Foreground="{StaticResource MutedTextBrush}" />
+                                        <ComboBox x:Name="InputPortsCombo" DisplayMemberPath="Name" SelectedValuePath="Id" HorizontalAlignment="Stretch" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Output Port" Foreground="{StaticResource MutedTextBrush}" />
+                                        <ComboBox x:Name="OutputPortsCombo" DisplayMemberPath="Name" SelectedValuePath="Id" HorizontalAlignment="Stretch" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                                        <Button Content="Refresh" Click="RefreshPorts_Click" />
+                                        <Button x:Name="ConnectButton" Content="Connect" Click="Connect_Click" Background="{StaticResource AccentBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <StackPanel Grid.Row="1" Margin="0,20,0,18" Spacing="8">
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="EffectChainPanel" Orientation="Horizontal">
+                        <Border x:Name="DivMixContainer"
+                                Background="{StaticResource PanelAltBackground}"
+                                BorderBrush="#45607F"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="4"
+                                Margin="0,0,8,0"
+                                MinHeight="106"
+                                Tapped="DivMixContainer_Tapped">
+                            <Grid ColumnSpacing="6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="48" />
+                                    <ColumnDefinition Width="Auto" MinWidth="60" />
+                                    <ColumnDefinition Width="48" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="DivModuleButton" Grid.Column="0" Content="DIV" Click="ContainerModule_Click" Tag="DIV" Background="Black" MinHeight="86" Padding="2,4" FontSize="14" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                                <StackPanel x:Name="DivMixChannelsPanel" Grid.Column="1" Spacing="6" VerticalAlignment="Center">
+                                    <Border x:Name="TopChannelDropZone" BorderBrush="Transparent" BorderThickness="0" Padding="2" MinHeight="32">
+                                        <StackPanel x:Name="TopChannelPanel" Orientation="Horizontal" Spacing="4" />
+                                    </Border>
+                                    <Border x:Name="BottomChannelDropZone" BorderBrush="Transparent" BorderThickness="0" Padding="2" MinHeight="32">
+                                        <StackPanel x:Name="BottomChannelPanel" Orientation="Horizontal" Spacing="4" />
+                                    </Border>
+                                </StackPanel>
+                                <Button x:Name="MixModuleButton" Grid.Column="2" Content="MIX" Click="ContainerModule_Click" Tag="MIX" Background="Black" MinHeight="86" Padding="2,4" FontSize="14" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </StackPanel>
+
+            <Border x:Name="ParameterCard"
+                    Grid.Row="2"
+                    Background="{StaticResource PanelBackground}"
+                    BorderBrush="#334D6D"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="18">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SelectedBlockText" Text="OD/DS" FontSize="26" FontWeight="SemiBold" />
+                        <StackPanel x:Name="HeaderControlsPanel"
+                                    Grid.Column="1"
+                                    Orientation="Horizontal"
+                                    Spacing="22"
+                                    Margin="40,0,0,0"
+                                    VerticalAlignment="Center"
+                                    Visibility="Collapsed">
+                            <StackPanel x:Name="HeaderOnOffPanel"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed">
+                                <TextBlock Text="On/Off" FontSize="18" VerticalAlignment="Center" />
+                                <CheckBox x:Name="HeaderOnOffCheckBox" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel x:Name="HeaderTypePanel"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed">
+                                <TextBlock Text="Type" FontSize="18" VerticalAlignment="Center" />
+                                <ComboBox x:Name="HeaderTypeComboBox"
+                                          DisplayMemberPath="Label"
+                                          SelectedValuePath="Value"
+                                          MinWidth="132"
+                                          VerticalAlignment="Center" />
+                            </StackPanel>
+                        </StackPanel>
+                        <TextBlock x:Name="PatchStatusText"
+                                   Grid.Column="3"
+                                   Text="Not synced"
+                                   Visibility="Collapsed"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                    <ScrollViewer x:Name="ParametersScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
+                        <Grid Background="Transparent">
+                            <StackPanel x:Name="ParametersPanel" />
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Border x:Name="BusyOverlay"
+                Grid.ColumnSpan="2"
+                Background="#99000000"
+                Visibility="Collapsed">
+            <TextBlock x:Name="BusyText"
+                       Text="Working..."
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+        </Border>
+    </Grid>
+</Window>

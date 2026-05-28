@@ -1,0 +1,29 @@
+
+bin/
+obj/
+
+.dotnet-cli-home/
+.nuget/
+
+artifacts/
+logs/
+*.log
+publish/
+release/
+
+.vs/
+.vscode/
+*.user
+*.suo
+
+TestResults/
+coverage/
+*.coverage
+*.trx
+
+# Local research/reference material. Do not redistribute vendor manuals or copied
+# reference extracts in the public repository.
+reference/
+screenshots/
+
+*.apmx86
