@@ -72,13 +72,9 @@ dotnet publish src\GT001.Editor.App\GT001.Editor.App.csproj -c Release -r win-x6
 ## Basic Use
 
 1. Connect the GT-001 over USB.
-2. Start GT-001 Editor.
-3. Open the connection menu in the top-right header.
-4. Select the GT-001 input and output ports.
-5. Click `Connect`.
-6. Select a patch from the User or Factory tabs.
-7. Edit parameters in the main panel.
-8. Click `WRITE` to save the current temporary patch to a User patch number and name.
+2. Select a patch from the User or Factory tabs.
+3. Edit parameters in the main panel.
+4. Click `WRITE` to save the current temporary patch to a User patch number and name.
 
 ## Repository Notes
 
