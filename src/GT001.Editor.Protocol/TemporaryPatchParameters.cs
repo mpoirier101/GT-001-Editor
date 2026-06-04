@@ -143,12 +143,13 @@ public static class TemporaryPatchParameters
 
     private static readonly ParameterOption[] NoiseSuppressorDetect = Options("Input", "NS Input", "FV Out");
 
-    private static readonly ParameterOption[] AccelType = Options(
-        "S-Bend", "Laser Beam", "Ring Mod", "Twist", "Warp", "Feedbacker");
-
-    private static readonly ParameterOption[] SBendPitch = Options("-3 oct", "-2 oct", "-1 oct", "+1 oct", "+2 oct", "+3 oct", "+4 oct");
-
-    private static readonly ParameterOption[] FeedbackerMode = Options("Normal", "Osc");
+    private static readonly ParameterOption[] ExpFunction =
+    [
+        new(0x00, "OFF"),
+        new(0x01, "FOOT VOLUME"),
+        new(0x03, "WAH"),
+        new(0x05, "WAH/FV")
+    ];
 
     private static readonly ParameterOption[] MasterKey = Options(
         "C (Am)", "Db (Bbm)", "D (Bm)", "Eb (Cm)", "E (C#m)", "F (Dm)",
@@ -485,13 +486,6 @@ public static class TemporaryPatchParameters
         new("ns2.threshold", "Threshold", "NS2", new(0x00, 0x00, 0x06, 0x69), 1, 0, 100, ParameterValueKind.Integer),
         new("ns2.release", "Release", "NS2", new(0x00, 0x00, 0x06, 0x6A), 1, 0, 100, ParameterValueKind.Integer),
         new("ns2.detect", "Detect", "NS2", new(0x00, 0x00, 0x06, 0x6B), 1, 0, 0x02, ParameterValueKind.Enum, Options: NoiseSuppressorDetect),
-        new("accel.type", "Type", "ACCEL", new(0x00, 0x00, 0x06, 0x70), 1, 0, 0x05, ParameterValueKind.Enum, Options: AccelType),
-        new("accel.sBendPitch", "S-Bend Pitch", "ACCEL", new(0x00, 0x00, 0x06, 0x71), 1, 0, 0x06, ParameterValueKind.Enum, Options: SBendPitch),
-        new("accel.sBendRise", "S-Bend Rise Time", "ACCEL", new(0x00, 0x00, 0x06, 0x72), 1, 0, 100, ParameterValueKind.Integer),
-        new("accel.sBendFall", "S-Bend Fall Time", "ACCEL", new(0x00, 0x00, 0x06, 0x73), 1, 0, 100, ParameterValueKind.Integer),
-        new("accel.feedbackerMode", "Feedbacker Mode", "ACCEL", new(0x00, 0x00, 0x07, 0x04), 1, 0, 1, ParameterValueKind.Enum, Options: FeedbackerMode),
-        new("accel.feedbackerDepth", "Feedbacker Depth", "ACCEL", new(0x00, 0x00, 0x07, 0x05), 1, 0, 100, ParameterValueKind.Integer),
-        new("accel.feedbackerRise", "Feedbacker Rise Time", "ACCEL", new(0x00, 0x00, 0x07, 0x06), 1, 0, 100, ParameterValueKind.Integer),
         new("master.patchLevel", "Patch Level", "MASTER", new(0x00, 0x00, 0x07, 0x10), 1, 0, 100, ParameterValueKind.Integer),
         new("master.lowGain", "Master Low Gain", "MASTER", new(0x00, 0x00, 0x07, 0x11), 1, 0, 0x28, ParameterValueKind.Integer, "dB"),
         new("master.midFreq", "Master Mid Freq", "MASTER", new(0x00, 0x00, 0x07, 0x12), 1, 0, 0x1B, ParameterValueKind.Enum, Options: MidFrequency),
@@ -500,7 +494,8 @@ public static class TemporaryPatchParameters
         new("master.highGain", "Master High Gain", "MASTER", new(0x00, 0x00, 0x07, 0x15), 1, 0, 0x28, ParameterValueKind.Integer, "dB"),
         new("master.bpm", "Master BPM", "MASTER", new(0x00, 0x00, 0x07, 0x16), 2, 40, 250, ParameterValueKind.Integer),
         new("master.key", "Master Key", "MASTER", new(0x00, 0x00, 0x07, 0x18), 1, 0, 0x0B, ParameterValueKind.Enum, Options: MasterKey),
-        new("master.beat", "Master Beat", "MASTER", new(0x00, 0x00, 0x07, 0x19), 1, 0, 0x1F, ParameterValueKind.Enum, Options: MasterBeat)
+        new("master.beat", "Master Beat", "MASTER", new(0x00, 0x00, 0x07, 0x19), 1, 0, 0x1F, ParameterValueKind.Enum, Options: MasterBeat),
+        new("exp.function", "EXP", "CTL/EXP", new(0x00, 0x00, 0x08, 0x10), 1, 0, 0x05, ParameterValueKind.Enum, Options: ExpFunction)
     ];
 
     public static ParameterDefinition? FindByTemporaryPatchAddress(Gt001Address address)
@@ -528,8 +523,8 @@ public static class TemporaryPatchParameters
                 "MIX" or
                 "NS1" or
                 "NS2" or
-                "ACCEL" or
-                "MASTER")
+                "MASTER" or
+                "CTL/EXP")
             .Max(parameter => parameter.Offset.ToLinearValue() + parameter.Size);
         return Gt001Address.FromLinearValue(size);
     }

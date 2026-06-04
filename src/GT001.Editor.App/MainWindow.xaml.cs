@@ -4,6 +4,7 @@ using GT001.Editor.Core;
 using GT001.Editor.Midi;
 using GT001.Editor.Protocol;
 using Microsoft.UI;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -15,11 +16,20 @@ namespace GT001.Editor.App;
 public partial class MainWindow : Window
 {
     private const string MainGt001PortName = "GT-001 Ver1-1";
+    private const string ControlGt001PortName = "GT-001 Ver1-1 CTRL";
     private const string TopLane = "Top";
     private const string BottomLane = "Bottom";
     private const string UserPatchTab = "User";
     private const string FactoryPatchTab = "Factory";
+    private const int InitialWindowWidth = 1260;
+    private const int InitialWindowHeight = 820;
     private const string AfterDivMixTarget = "__AFTER_DIV_MIX__";
+    private const int TemporaryPatchStreamChunkPayloadSize = 241;
+    private static readonly TimeSpan IdentityRequiredResponseTimeout = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan IdentitySettleTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan PatchSelectionEchoTimeout = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan RequestResponseTimeout = TimeSpan.FromSeconds(10);
+    private static readonly int ModeledTemporaryPatchChunkCount = (TemporaryPatchParameters.GetModeledTemporaryPatchRequestSize().ToLinearValue() + TemporaryPatchStreamChunkPayloadSize - 1) / TemporaryPatchStreamChunkPayloadSize;
     private const byte FxChainComp = 0x00;
     private const byte FxChainPreampA = 0x02;
     private const byte FxChainPreampB = 0x03;
@@ -29,7 +39,6 @@ public partial class MainWindow : Window
     private const byte FxChainDelay = 0x07;
     private const byte FxChainChorus = 0x08;
     private const byte FxChainReverb = 0x09;
-    private const byte FxChainAccel = 0x0A;
     private const byte FxChainPedalFx = 0x0B;
     private const byte FxChainFootVolume = 0x0C;
     private const byte FxChainNs1 = 0x0D;
@@ -84,7 +93,6 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, int> _pendingValues = [];
     private readonly Dictionary<string, ParameterDefinition> _pendingDefinitions = [];
     private readonly Dictionary<string, PendingParameterConfirmation> _pendingConfirmations = [];
-    private readonly HashSet<string> _patchNameRequestTabs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Queue<PatchSlot> _patchNameRequestQueue = [];
     private readonly Dictionary<string, byte> _moduleFxChainValues = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -98,8 +106,7 @@ public partial class MainWindow : Window
         ["DLY"] = FxChainDelay,
         ["CHO"] = FxChainChorus,
         ["REV"] = FxChainReverb,
-        ["ACC"] = FxChainAccel,
-        ["PDL"] = FxChainPedalFx,
+        ["WAH"] = FxChainPedalFx,
         ["FV"] = FxChainFootVolume,
         ["NS1"] = FxChainNs1,
         ["NS2"] = FxChainNs2
@@ -116,8 +123,7 @@ public partial class MainWindow : Window
         [FxChainDelay] = "DLY",
         [FxChainChorus] = "CHO",
         [FxChainReverb] = "REV",
-        [FxChainAccel] = "ACC",
-        [FxChainPedalFx] = "PDL",
+        [FxChainPedalFx] = "WAH",
         [FxChainFootVolume] = "FV",
         [FxChainNs1] = "NS1",
         [FxChainNs2] = "NS2"
@@ -142,8 +148,7 @@ public partial class MainWindow : Window
         ["DLY"] = new("DLY", "DELAY", ["DELAY"]),
         ["CHO"] = new("CHO", "CHORUS", ["CHORUS"]),
         ["REV"] = new("REV", "REVERB", ["REVERB"]),
-        ["ACC"] = new("ACC", "ACCEL", ["ACCEL"]),
-        ["PDL"] = new("PDL", "PEDAL FX", ["PEDAL FX"]),
+        ["WAH"] = new("WAH", "WAH", ["PEDAL FX"]),
         ["FV"] = new("FV", "FOOT VOL", ["FOOT VOLUME"]),
         ["NS1"] = new("NS1", "NS1", ["NS1"]),
         ["NS2"] = new("NS2", "NS2", ["NS2"]),
@@ -204,76 +209,103 @@ public partial class MainWindow : Window
     private DateTimeOffset _lastModuleTapAt;
     private bool _isConnected;
     private bool _isConnecting;
-    private bool _identityReplySeen;
+    private bool _connectInitialPatchSelectionScheduled;
     private bool _syncAwaitingReply;
     private bool _syncRequestedAfterConnect;
+    private bool _acceptTemporaryData;
+    private bool _preSyncTemporaryDataIgnored;
     private bool _isBuildingParameterPanel;
     private bool _isWritingPatch;
     private int _busyAnimationFrame;
     private int _currentPatchBankNumber;
-    private int _syncRetryCount;
+    private int _identityReplyCount;
     private PatchSlot? _pendingWriteTarget;
     private string _pendingWriteName = string.Empty;
-    private DispatcherTimer? _syncTimeoutTimer;
+    private HashSet<int> _temporaryPatchSyncChunkAddresses = [];
     private DispatcherTimer? _busyAnimationTimer;
     private DispatcherTimer? _patchNameRequestTimer;
     private DispatcherTimer? _writeTimeoutTimer;
+    private CancellationTokenSource? _connectSequenceCts;
+    private CancellationTokenSource? _syncSequenceCts;
+    private TaskCompletionSource<byte>? _identityCompletion;
+    private TaskCompletionSource<int>? _identitySettleCompletion;
+    private TaskCompletionSource<MidiPatchChangeEventArgs>? _patchSelectionCompletion;
+    private TaskCompletionSource<IReadOnlyList<ParameterValueReceivedEventArgs>>? _temporaryPatchSyncCompletion;
+    private TaskCompletionSource<IReadOnlyList<byte>>? _fxChainSyncCompletion;
     private byte[] _fxChainPositions = FxChain.DefaultOrder.ToArray();
+    private byte[]? _pendingWriteData;
+    private bool[]? _pendingWriteDataReceived;
 
     public MainWindow()
     {
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(1440, 900));
+        AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "GTe.ico"));
+        AppWindow.Resize(new SizeInt32(InitialWindowWidth, InitialWindowHeight));
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.PreferredMinimumWidth = InitialWindowWidth;
+            presenter.PreferredMinimumHeight = InitialWindowHeight;
+        }
         Closed += MainWindow_Closed;
         _logFilePath = CreateLogFilePath();
 
-        _midi = new Gt001MidiService(new DryWetMidiTransport(), new Gt001Protocol());
+        _midi = new Gt001MidiService(new WinMmMidiTransport(), new Gt001Protocol());
         _midi.LogCreated += (_, entry) => DispatcherQueue.TryEnqueue(() => AddLog(entry));
-        _midi.PatchChangeReceived += (_, args) => DispatcherQueue.TryEnqueue(() => SelectPatchFromDevice(args.BankNumber, args.ProgramNumber));
+        _midi.PatchChangeReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        {
+            _patchSelectionCompletion?.TrySetResult(args);
+            SelectPatchFromDevice(args.BankNumber, args.ProgramNumber);
+        });
         _midi.PatchNameReceived += (_, args) => DispatcherQueue.TryEnqueue(() => ApplyPatchName(args.BankNumber, args.ProgramNumber, args.Name));
         _midi.TemporaryPatchDataReceived += (_, args) => DispatcherQueue.TryEnqueue(() => CompletePendingWrite(args.Payload));
+        _midi.TemporaryPatchChunkReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_isWritingPatch)
+            {
+                TrackTemporaryPatchWriteChunk(args.Address, args.Payload);
+            }
+
+            if (ShouldAcceptTemporaryData())
+            {
+                TrackTemporaryPatchSyncChunk(args.Address, args.Payload);
+            }
+        });
+        _midi.TemporaryPatchNameReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (ShouldAcceptTemporaryData())
+            {
+                ApplyTemporaryPatchName(args.Name);
+            }
+        });
         _midi.FxChainReceived += (_, positions) => DispatcherQueue.TryEnqueue(() =>
         {
+            if (!ShouldAcceptTemporaryData())
+            {
+                return;
+            }
+
             ApplyFxChainPositions(positions);
+            MarkFxChainSynced();
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Synced FX chain: {string.Join(" ", positions.Select(value => value.ToString("X2")))}"));
         });
-        _midi.IdentityConfirmed += (_, _) => DispatcherQueue.TryEnqueue(() =>
+        _midi.IdentityConfirmed += (_, args) => DispatcherQueue.TryEnqueue(() =>
         {
-            _identityReplySeen = true;
-            ConnectionStatusButton.Content = "GT-001 identified";
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "GT-001 identity reply confirmed."));
-            if (!_syncAwaitingReply && !_syncRequestedAfterConnect)
+            _identityReplyCount++;
+            _identityCompletion?.TrySetResult(args.DeviceId);
+            if (_identityReplyCount >= 2)
             {
-                _syncRequestedAfterConnect = true;
-                ScheduleTemporaryPatchSync(resetRetryCount: true);
-                return;
+                _identitySettleCompletion?.TrySetResult(_identityReplyCount);
             }
 
-            if (_syncAwaitingReply && _syncRetryCount < 2)
-            {
-                _syncRetryCount++;
-                AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Identity reply received during sync; retrying temporary patch request."));
-                ScheduleTemporaryPatchSync(resetRetryCount: false);
-            }
+            ConnectionStatusText.Text = "GT-001 identified";
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"GT-001 identity reply {_identityReplyCount} confirmed; device id={args.DeviceId:X2}."));
         });
-        _midi.TemporaryParameterReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        _midi.TemporaryParametersReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
         {
-            if (ShouldIgnoreParameterSync(args.Definition, args.Value))
+            if (ShouldAcceptTemporaryData())
             {
-                return;
+                ApplyTemporaryParameterBatch(args.Values);
             }
-
-            _syncAwaitingReply = false;
-            _syncTimeoutTimer?.Stop();
-            _isConnecting = false;
-            ConnectionStatusButton.Content = "GT-001 synced";
-            CompleteParameterConfirmation(args.Definition, args.Value);
-            _state.Patch = _state.Patch.WithParameterValue(args.Definition.Id, args.Value, ParameterSyncStatus.Synced);
-            BuildEffectChain();
-            UpdateDivMixContainer();
-            BuildParameterPanel();
-            UpdatePatchStatusText();
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Synced {args.Definition.Block}: {args.Definition.DisplayName} = {args.Definition.FormatValue(args.Value)}"));
         });
 
         ApplyPatchTab(UserPatchTab);
@@ -286,7 +318,11 @@ public partial class MainWindow : Window
         AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Session log: {_logFilePath}"));
     }
 
-    private void RefreshPorts_Click(object sender, RoutedEventArgs e) => RefreshPorts();
+    private void RootGrid_Loaded(object sender, RoutedEventArgs e)
+    {
+        RootGrid.Loaded -= RootGrid_Loaded;
+        StartAutomaticConnection();
+    }
 
     private static PatchSlot[] BuildPatchSlots(string group, string prefix, int firstBankNumber)
     {
@@ -340,24 +376,113 @@ public partial class MainWindow : Window
         patchSlot?.SetPatchName(name);
     }
 
-    private void QueuePatchNameRequestsForCurrentTab()
+    private void ApplyTemporaryPatchName(string name)
     {
-        if (!_isConnected || !_patchNameRequestTabs.Add(_selectedPatchTab))
+        if (PatchList.SelectedItem is PatchSlot patchSlot)
+        {
+            patchSlot.SetPatchName(name);
+            _state.Patch = _state.Patch with { Name = patchSlot.Number };
+        }
+    }
+
+    private void ApplyTemporaryParameterBatch(IReadOnlyList<ParameterValueReceivedEventArgs> values)
+    {
+        var appliedAny = false;
+        foreach (var value in values)
+        {
+            if (ShouldIgnoreParameterSync(value.Definition, value.Value))
+            {
+                continue;
+            }
+
+            appliedAny = true;
+            CompleteParameterConfirmation(value.Definition, value.Value);
+            _state.Patch = _state.Patch.WithParameterValue(value.Definition.Id, value.Value, ParameterSyncStatus.Synced);
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Synced {value.Definition.Block}: {value.Definition.DisplayName} = {value.Definition.FormatValue(value.Value)}"));
+        }
+
+        if (!appliedAny)
         {
             return;
         }
 
-        foreach (var patchSlot in CurrentPatchSlots.Where(slot => string.IsNullOrWhiteSpace(slot.PatchName)))
+        BuildEffectChain();
+        UpdateDivMixContainer();
+        BuildParameterPanel();
+        UpdatePatchStatusText();
+    }
+
+    private void TrackTemporaryPatchSyncChunk(Gt001Address address, IReadOnlyList<byte> payload)
+    {
+        if (_temporaryPatchSyncCompletion is null)
         {
-            _patchNameRequestQueue.Enqueue(patchSlot);
+            return;
         }
 
-        StartPatchNameRequestTimer();
+        _temporaryPatchSyncChunkAddresses.Add(address.ToLinearValue());
+        AddLog(new AppLogEntry(
+            DateTimeOffset.Now,
+            AppLogDirection.Info,
+            $"Temporary patch chunk {_temporaryPatchSyncChunkAddresses.Count}/{ModeledTemporaryPatchChunkCount} received at {address} ({payload.Count} byte payload)."));
+
+        if (_temporaryPatchSyncChunkAddresses.Count >= ModeledTemporaryPatchChunkCount)
+        {
+            _temporaryPatchSyncCompletion.TrySetResult(Array.Empty<ParameterValueReceivedEventArgs>());
+        }
+    }
+
+    private bool ShouldAcceptTemporaryData()
+    {
+        if (_acceptTemporaryData || _syncAwaitingReply || _isWritingPatch || _pendingConfirmations.Count > 0)
+        {
+            return true;
+        }
+
+        if (!_preSyncTemporaryDataIgnored)
+        {
+            _preSyncTemporaryDataIgnored = true;
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Ignored temporary patch data received before sync started."));
+        }
+
+        return false;
+    }
+
+    private void MarkFxChainSynced()
+    {
+        _fxChainSyncCompletion?.TrySetResult(_fxChainPositions);
+    }
+
+    private void QueuePatchNameRequestsForCurrentTab()
+    {
+        if (!_isConnected || _syncAwaitingReply || _isWritingPatch)
+        {
+            return;
+        }
+
+        var queuedKeys = _patchNameRequestQueue.Select(slot => slot.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var patchSlot in CurrentPatchSlots.Where(slot => string.IsNullOrWhiteSpace(slot.PatchName)))
+        {
+            if (queuedKeys.Add(patchSlot.Key))
+            {
+                _patchNameRequestQueue.Enqueue(patchSlot);
+            }
+        }
+
+        if (_patchNameRequestQueue.Count > 0)
+        {
+            StartPatchNameRequestTimer();
+        }
+    }
+
+    private void PausePatchNameRequests()
+    {
+        _patchNameRequestTimer?.Stop();
+        _patchNameRequestQueue.Clear();
     }
 
     private void StartPatchNameRequestTimer()
     {
-        _patchNameRequestTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(35) };
+        _patchNameRequestTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(75) };
         _patchNameRequestTimer.Stop();
         _patchNameRequestTimer.Tick -= PatchNameRequestTimer_Tick;
         _patchNameRequestTimer.Tick += PatchNameRequestTimer_Tick;
@@ -366,28 +491,20 @@ public partial class MainWindow : Window
 
     private void PatchNameRequestTimer_Tick(object? sender, object e)
     {
-        if (!_isConnected || _patchNameRequestQueue.Count == 0)
+        if (!_isConnected || _syncAwaitingReply || _isWritingPatch || _patchNameRequestQueue.Count == 0)
         {
             _patchNameRequestTimer?.Stop();
             return;
         }
 
-        RequestPatchName(_patchNameRequestQueue.Dequeue());
-    }
-
-    private void RequestPatchName(PatchSlot patchSlot)
-    {
-        if (!_isConnected)
-        {
-            return;
-        }
-
         try
         {
+            var patchSlot = _patchNameRequestQueue.Dequeue();
             _midi.RequestPatchName(patchSlot.BankNumber, patchSlot.ProgramNumber);
         }
         catch (Exception ex)
         {
+            _patchNameRequestTimer?.Stop();
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
         }
     }
@@ -409,7 +526,7 @@ public partial class MainWindow : Window
         }
 
         _syncAwaitingReply = false;
-        _syncTimeoutTimer?.Stop();
+        _syncSequenceCts?.Cancel();
         UpdatePatchStatusText();
 
         if (!_isConnected)
@@ -420,13 +537,15 @@ public partial class MainWindow : Window
 
         try
         {
-            SendPatchSelection(patchSlot.BankNumber, patchSlot.ProgramNumber);
-            RequestPatchName(patchSlot);
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Patch change requested: {patchSlot.DisplayText}."));
-            SchedulePatchChangeSync();
+            var syncToken = BeginPatchSync();
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Selected {patchSlot.DisplayText}; syncing current temporary patch."));
+            StartPatchSync(syncToken, patchSlot);
         }
         catch (Exception ex)
         {
+            _syncSequenceCts?.Cancel();
+            _syncAwaitingReply = false;
+            UpdatePatchStatusText();
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
         }
     }
@@ -456,8 +575,12 @@ public partial class MainWindow : Window
             _isUpdatingPatchSelectionFromDevice = false;
         }
 
-        RequestPatchName(patchSlot);
         AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Device selected patch {patchSlot.DisplayText}."));
+        if (_isConnected && !_syncAwaitingReply)
+        {
+            SchedulePatchChangeSync();
+        }
+
         UpdatePatchStatusText();
         UpdateWriteButtonState();
     }
@@ -466,7 +589,7 @@ public partial class MainWindow : Window
     {
         if (!_isConnected)
         {
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, "Connect MIDI ports before writing a patch."));
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, "GT-001 is not connected; patch write skipped."));
             return;
         }
 
@@ -485,6 +608,8 @@ public partial class MainWindow : Window
         {
             _pendingWriteTarget = target.Slot;
             _pendingWriteName = target.Name;
+            _pendingWriteData = new byte[PatchMemory.RegularPatchDataSize.ToLinearValue()];
+            _pendingWriteDataReceived = new bool[_pendingWriteData.Length];
             _isWritingPatch = true;
             PatchStatusText.Text = "Writing...";
             PatchStatusText.Foreground = GetBrushResource("WarmBrush");
@@ -561,6 +686,38 @@ public partial class MainWindow : Window
         CompleteWriteWithError("Patch write timed out waiting for temporary patch data.");
     }
 
+    private void TrackTemporaryPatchWriteChunk(Gt001Address address, IReadOnlyList<byte> payload)
+    {
+        if (!_isWritingPatch || _pendingWriteData is null || _pendingWriteDataReceived is null)
+        {
+            return;
+        }
+
+        var offset = address.ToLinearValue() - Gt001Address.TemporaryPatchBase.ToLinearValue();
+        if (offset < 0 || offset >= _pendingWriteData.Length)
+        {
+            return;
+        }
+
+        var count = Math.Min(payload.Count, _pendingWriteData.Length - offset);
+        for (var i = 0; i < count; i++)
+        {
+            _pendingWriteData[offset + i] = payload[i];
+            _pendingWriteDataReceived[offset + i] = true;
+        }
+
+        var receivedCount = _pendingWriteDataReceived.Count(received => received);
+        AddLog(new AppLogEntry(
+            DateTimeOffset.Now,
+            AppLogDirection.Info,
+            $"Temporary patch write data received {receivedCount}/{_pendingWriteData.Length} bytes."));
+
+        if (receivedCount >= _pendingWriteData.Length)
+        {
+            CompletePendingWrite(_pendingWriteData);
+        }
+    }
+
     private void CompletePendingWrite(IReadOnlyList<byte> payload)
     {
         if (!_isWritingPatch || _pendingWriteTarget is not PatchSlot patchSlot)
@@ -575,10 +732,11 @@ public partial class MainWindow : Window
             EncodePatchName(_pendingWriteName, writeData);
             _midi.WriteUserPatch(patchSlot.BankNumber, patchSlot.ProgramNumber, writeData);
             patchSlot.SetPatchName(_pendingWriteName);
-            RequestPatchName(patchSlot);
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Wrote current TEMP patch to {patchSlot.DisplayText}."));
             _pendingWriteTarget = null;
             _pendingWriteName = string.Empty;
+            _pendingWriteData = null;
+            _pendingWriteDataReceived = null;
             _isWritingPatch = false;
             PatchStatusText.Text = "Written";
             PatchStatusText.Foreground = new SolidColorBrush(Colors.LightGreen);
@@ -596,6 +754,8 @@ public partial class MainWindow : Window
         _writeTimeoutTimer?.Stop();
         _pendingWriteTarget = null;
         _pendingWriteName = string.Empty;
+        _pendingWriteData = null;
+        _pendingWriteDataReceived = null;
         _isWritingPatch = false;
         UpdatePatchStatusText();
         UpdateBusyIndicator();
@@ -623,17 +783,23 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Connect_Click(object sender, RoutedEventArgs e)
+    private void StartAutomaticConnection()
     {
-        if (_isConnected)
+        if (_isConnected || _isConnecting)
         {
-            Disconnect();
             return;
         }
 
-        if (InputPortsCombo.SelectedValue is not string inputId || OutputPortsCombo.SelectedValue is not string outputId)
+        ConnectionStatusText.Text = "Looking for GT-001";
+        if (!TryGetDefaultGt001Ports(out var inputPort, out var outputPort))
         {
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, "Select both MIDI input and output ports."));
+            RefreshPorts();
+        }
+
+        if (!TryGetDefaultGt001Ports(out inputPort, out outputPort))
+        {
+            ConnectionStatusText.Text = "GT-001 missing";
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, "GT-001 Ver1-1 MIDI input/output ports were not found."));
             return;
         }
 
@@ -641,88 +807,84 @@ public partial class MainWindow : Window
         {
             _isConnected = false;
             _isConnecting = true;
-            _identityReplySeen = false;
+            _connectInitialPatchSelectionScheduled = false;
             _syncAwaitingReply = false;
             _syncRequestedAfterConnect = false;
-            _syncRetryCount = 0;
+            _acceptTemporaryData = false;
+            _preSyncTemporaryDataIgnored = false;
             _currentPatchBankNumber = 0;
-            _patchNameRequestTabs.Clear();
             _patchNameRequestQueue.Clear();
-            _syncTimeoutTimer?.Stop();
+            _connectSequenceCts?.Cancel();
+            _connectSequenceCts = new CancellationTokenSource();
+            _syncSequenceCts?.Cancel();
             UpdateBusyIndicator();
-            _midi.Open(inputId, outputId);
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Connecting MIDI input '{inputPort.Name}' and output '{outputPort.Name}'."));
+            _midi.Open(inputPort.Id, outputPort.Id);
             _isConnected = true;
-            ConnectButton.Content = "Disconnect";
-            ConnectionStatusButton.Content = "Connected";
-            ConnectionStatusButton.Flyout.Hide();
-            QueuePatchNameRequestsForCurrentTab();
+            ConnectionStatusText.Text = "Connected";
             UpdateWriteButtonState();
-            ScheduleConnectWakeupSequence();
-            ScheduleConnectAutoSync();
+            _ = RunConnectSequenceAsync(_connectSequenceCts.Token);
         }
         catch (Exception ex)
         {
+            _connectSequenceCts?.Cancel();
             _isConnected = false;
             _isConnecting = false;
             UpdateBusyIndicator();
             UpdateWriteButtonState();
-            ConnectionStatusButton.Content = "Connection error";
+            ConnectionStatusText.Text = "Connection error";
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
         }
     }
 
-    private void ScheduleConnectWakeupSequence()
+    private async Task RunConnectSequenceAsync(CancellationToken cancellationToken)
     {
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        timer.Tick += (_, _) =>
+        try
         {
-            timer.Stop();
-            try
-            {
-                _midi.RequestIdentity("Identity Wakeup");
-                ScheduleConnectIdentityVerify();
-            }
-            catch (Exception ex)
-            {
-                _isConnecting = false;
-                UpdateBusyIndicator();
-                AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
-            }
-        };
-        timer.Start();
-    }
-
-    private void ScheduleConnectIdentityVerify()
-    {
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
-        timer.Tick += (_, _) =>
-        {
-            timer.Stop();
-            if (_identityReplySeen)
+            await Task.Delay(500, cancellationToken);
+            if (!_isConnected)
             {
                 return;
             }
 
-            try
+            if (!_isConnected || _syncAwaitingReply || _syncRequestedAfterConnect || _connectInitialPatchSelectionScheduled)
             {
-                _midi.RequestIdentity("Identity Verify");
+                return;
             }
-            catch (Exception ex)
+
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Sending editor startup status before identity."));
+            _midi.SendEditorStartupStatus();
+            await RequestIdentityUntilConfirmedAsync(cancellationToken);
+            if (!_isConnected || _syncAwaitingReply || _syncRequestedAfterConnect || _connectInitialPatchSelectionScheduled)
             {
-                _isConnecting = false;
-                UpdateBusyIndicator();
-                AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
+                return;
             }
-        };
-        timer.Start();
+
+            QueueConnectInitialPatchSelection();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _isConnecting = false;
+            UpdateBusyIndicator();
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
+        }
     }
 
-    private void ScheduleConnectAutoSync()
+    private void QueueConnectInitialPatchSelection()
     {
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
-        timer.Tick += (_, _) =>
+        _connectInitialPatchSelectionScheduled = true;
+        var cancellationToken = _connectSequenceCts?.Token ?? CancellationToken.None;
+        _ = SelectInitialPatchAfterDelayAsync(cancellationToken);
+    }
+
+    private async Task SelectInitialPatchAfterDelayAsync(CancellationToken cancellationToken)
+    {
+        try
         {
-            timer.Stop();
+            await Task.Delay(250, cancellationToken);
             if (!_isConnected || _syncAwaitingReply || _syncRequestedAfterConnect)
             {
                 return;
@@ -730,8 +892,7 @@ public partial class MainWindow : Window
 
             try
             {
-                _syncRequestedAfterConnect = true;
-                RequestTemporaryPatchSync(resetRetryCount: true);
+                SelectPatchAfterConnect(_userPatchSlots[0]);
             }
             catch (Exception ex)
             {
@@ -739,143 +900,216 @@ public partial class MainWindow : Window
                 UpdateBusyIndicator();
                 AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
             }
-        };
-        timer.Start();
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
-    private void ScheduleTemporaryPatchSync(bool resetRetryCount = true)
+    private void SelectPatchAfterConnect(PatchSlot patchSlot)
     {
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
-        timer.Tick += (_, _) =>
+        _currentPatchBankNumber = patchSlot.BankNumber;
+        _state.Patch = _state.Patch with { Name = patchSlot.Number };
+        _isUpdatingPatchSelectionFromDevice = true;
+        try
         {
-            timer.Stop();
-            try
-            {
-                RequestTemporaryPatchSync(resetRetryCount);
-            }
-            catch (Exception ex)
-            {
-                _isConnecting = false;
-                UpdateBusyIndicator();
-                AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
-            }
-        };
-        timer.Start();
+            ApplyPatchTab(patchSlot.Group);
+            PatchList.SelectedValue = patchSlot.Key;
+            PatchList.SelectedItem = patchSlot;
+            PatchList.ScrollIntoView(patchSlot);
+        }
+        finally
+        {
+            _isUpdatingPatchSelectionFromDevice = false;
+        }
+
+        try
+        {
+            var syncToken = BeginPatchSync();
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Syncing current temporary patch after connect."));
+            StartPatchSync(syncToken, patchSlot);
+            UpdateWriteButtonState();
+        }
+        catch (Exception ex)
+        {
+            _syncSequenceCts?.Cancel();
+            _syncAwaitingReply = false;
+            _isConnecting = false;
+            UpdatePatchStatusText();
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
+        }
     }
 
     private void SchedulePatchChangeSync()
     {
+        var patchSlot = PatchList.SelectedItem as PatchSlot;
+        if (patchSlot is null)
+        {
+            return;
+        }
+
+        StartPatchSync(BeginPatchSync(), patchSlot);
+    }
+
+    private CancellationToken BeginPatchSync()
+    {
+        _syncSequenceCts?.Cancel();
+        _syncSequenceCts = new CancellationTokenSource();
+        PausePatchNameRequests();
         _syncAwaitingReply = true;
         _syncRequestedAfterConnect = true;
+        _acceptTemporaryData = true;
+        _temporaryPatchSyncChunkAddresses.Clear();
+        _temporaryPatchSyncCompletion = new TaskCompletionSource<IReadOnlyList<ParameterValueReceivedEventArgs>>();
+        _fxChainSyncCompletion = new TaskCompletionSource<IReadOnlyList<byte>>();
         PatchStatusText.Text = "Syncing...";
         UpdateBusyIndicator();
+        return _syncSequenceCts.Token;
+    }
 
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
-        timer.Tick += (_, _) =>
+    private void StartPatchSync(CancellationToken cancellationToken, PatchSlot patchSlot)
+    {
+        _ = RunPatchSyncAsync(patchSlot, cancellationToken);
+    }
+
+    private async Task RunPatchSyncAsync(PatchSlot patchSlot, CancellationToken cancellationToken)
+    {
+        try
         {
-            timer.Stop();
             if (!_isConnected)
             {
                 return;
             }
 
-            try
+            if (_temporaryPatchSyncCompletion is null || _fxChainSyncCompletion is null)
             {
-                RequestTemporaryPatchSync(resetRetryCount: true);
-            }
-            catch (Exception ex)
-            {
-                _syncAwaitingReply = false;
-                UpdatePatchStatusText();
-                AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
-            }
-        };
-        timer.Start();
-    }
-
-    private void SendPatchSelection(int bankNumber, int programNumber)
-    {
-        var patchOutput = GetPatchChangeOutputPort();
-        if (patchOutput is not null)
-        {
-            if (_currentPatchBankNumber != bankNumber)
-            {
-                _midi.SendPatchChangeToOutputPort(patchOutput.Id, bankNumber, programNumber);
-                _currentPatchBankNumber = bankNumber;
-            }
-            else
-            {
-                _midi.SendProgramChangeToOutputPort(patchOutput.Id, programNumber);
+                throw new InvalidOperationException("Patch sync was not initialized.");
             }
 
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Patch change sent on '{patchOutput.Name}'."));
-            return;
-        }
+            await SendPatchSelectionAsync(patchSlot, cancellationToken);
 
-        if (_currentPatchBankNumber != bankNumber)
-        {
-            _midi.SendPatchChange(bankNumber, programNumber);
-            _currentPatchBankNumber = bankNumber;
-            return;
-        }
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Requesting temporary patch."));
+            _midi.RequestModeledTemporaryPatch();
+            await WaitForResponseAsync(_temporaryPatchSyncCompletion.Task, "Temporary patch", RequestResponseTimeout, cancellationToken);
 
-        _midi.SendProgramChange(programNumber);
-    }
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Requesting FX chain."));
+            _midi.RequestFxChain();
+            await WaitForResponseAsync(_fxChainSyncCompletion.Task, "FX chain", RequestResponseTimeout, cancellationToken);
 
-    private MidiPortInfo? GetPatchChangeOutputPort()
-    {
-        var selectedOutputId = OutputPortsCombo.SelectedValue as string;
-        return _state.OutputPorts.FirstOrDefault(port =>
-            !port.Id.Equals(selectedOutputId, StringComparison.OrdinalIgnoreCase)
-            && port.Name.Contains("GT-001", StringComparison.OrdinalIgnoreCase)
-            && port.Name.Contains("DAW CTRL", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private void RequestTemporaryPatchSync(bool resetRetryCount)
-    {
-        if (resetRetryCount)
-        {
-            _syncRetryCount = 0;
-        }
-
-        _syncAwaitingReply = true;
-        _isConnecting = false;
-        PatchStatusText.Text = "Syncing...";
-        UpdateBusyIndicator();
-        _midi.RequestModeledTemporaryPatch();
-        _midi.RequestFxChain();
-        StartSyncTimeout();
-    }
-
-    private void StartSyncTimeout()
-    {
-        _syncTimeoutTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-        _syncTimeoutTimer.Stop();
-        _syncTimeoutTimer.Tick -= SyncTimeout_Tick;
-        _syncTimeoutTimer.Tick += SyncTimeout_Tick;
-        _syncTimeoutTimer.Start();
-    }
-
-    private void SyncTimeout_Tick(object? sender, object e)
-    {
-        _syncTimeoutTimer?.Stop();
-        if (!_syncAwaitingReply)
-        {
-            return;
-        }
-
-        if (_syncRetryCount >= 2)
-        {
             _syncAwaitingReply = false;
             _isConnecting = false;
+            ConnectionStatusText.Text = "GT-001 synced";
             UpdatePatchStatusText();
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, "Temporary patch sync timed out."));
-            return;
+            QueuePatchNameRequestsForCurrentTab();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (TimeoutException ex)
+        {
+            _syncAwaitingReply = false;
+            _acceptTemporaryData = false;
+            _isConnecting = false;
+            UpdatePatchStatusText();
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _syncAwaitingReply = false;
+            _acceptTemporaryData = false;
+            _isConnecting = false;
+            UpdatePatchStatusText();
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, ex.Message));
+        }
+        finally
+        {
+            _temporaryPatchSyncCompletion = null;
+            _fxChainSyncCompletion = null;
+            _temporaryPatchSyncChunkAddresses.Clear();
+        }
+    }
+
+    private async Task RequestIdentityUntilConfirmedAsync(CancellationToken cancellationToken)
+    {
+        _identityReplyCount = 0;
+        _identityCompletion = new TaskCompletionSource<byte>();
+        _identitySettleCompletion = new TaskCompletionSource<int>();
+
+        AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Requesting universal identity (1/2)."));
+        _midi.RequestIdentity();
+        if (!await WaitForOptionalResponseAsync(_identityCompletion.Task, IdentityRequiredResponseTimeout, cancellationToken))
+        {
+            _identityCompletion = null;
+            _identitySettleCompletion = null;
+            throw new TimeoutException("Identity sync timed out.");
         }
 
-        _syncRetryCount++;
-        AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Temporary patch sync timed out; retry {_syncRetryCount}."));
-        RequestTemporaryPatchSync(resetRetryCount: false);
+        var deviceId = _identityCompletion.Task.Result;
+        await Task.Delay(100, cancellationToken);
+
+        AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Requesting targeted identity device={deviceId:X2} (2/2)."));
+        _midi.RequestIdentity(deviceId);
+        if (_identityReplyCount < 2)
+        {
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, "Waiting for second identity reply before patch sync."));
+            await WaitForOptionalResponseAsync(_identitySettleCompletion.Task, IdentitySettleTimeout, cancellationToken);
+        }
+
+        AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Identity startup settled after {_identityReplyCount} reply/replies."));
+        _identityCompletion = null;
+        _identitySettleCompletion = null;
+    }
+
+    private async Task SendPatchSelectionAsync(PatchSlot patchSlot, CancellationToken cancellationToken)
+    {
+        _patchSelectionCompletion = new TaskCompletionSource<MidiPatchChangeEventArgs>();
+        var controlOutput = _state.OutputPorts.FirstOrDefault(port => port.Name.Equals(ControlGt001PortName, StringComparison.OrdinalIgnoreCase));
+        if (controlOutput is not null)
+        {
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Selecting {patchSlot.DisplayText} through '{controlOutput.Name}' with Bank Select MSB/LSB and Program Change {patchSlot.ProgramNumber + 1}."));
+            _midi.SendPatchChangeToOutputPort(controlOutput.Id, patchSlot.BankNumber, patchSlot.ProgramNumber);
+        }
+        else
+        {
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Selecting {patchSlot.DisplayText} through the connected output with Bank Select MSB/LSB and Program Change {patchSlot.ProgramNumber + 1}."));
+            _midi.SendPatchChange(patchSlot.BankNumber, patchSlot.ProgramNumber);
+        }
+
+        var echoReceived = await WaitForOptionalResponseAsync(_patchSelectionCompletion.Task, PatchSelectionEchoTimeout, cancellationToken);
+        _patchSelectionCompletion = null;
+        AddLog(new AppLogEntry(
+            DateTimeOffset.Now,
+            AppLogDirection.Info,
+            echoReceived
+                ? "Program Change echo received; continuing temporary patch sync."
+                : "No Program Change echo received before timeout; continuing temporary patch sync."));
+    }
+
+    private static async Task<T> WaitForResponseAsync<T>(Task<T> responseTask, string label, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var timeoutTask = Task.Delay(timeout, cancellationToken);
+        var completedTask = await Task.WhenAny(responseTask, timeoutTask);
+        if (completedTask == responseTask)
+        {
+            return await responseTask;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new TimeoutException($"{label} sync timed out.");
+    }
+
+    private static async Task<bool> WaitForOptionalResponseAsync<T>(Task<T> responseTask, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var timeoutTask = Task.Delay(timeout, cancellationToken);
+        var completedTask = await Task.WhenAny(responseTask, timeoutTask);
+        if (completedTask == responseTask)
+        {
+            await responseTask;
+            return true;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return false;
     }
 
     private void RefreshPorts()
@@ -894,12 +1128,6 @@ public partial class MainWindow : Window
                 _state.OutputPorts.Add(port);
             }
 
-            InputPortsCombo.ItemsSource = _state.InputPorts;
-            OutputPortsCombo.ItemsSource = _state.OutputPorts;
-
-            SelectGt001Port(InputPortsCombo);
-            SelectGt001Port(OutputPortsCombo);
-
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Found {_state.InputPorts.Count} input and {_state.OutputPorts.Count} output MIDI ports."));
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Input ports: {string.Join(", ", _state.InputPorts.Select(port => $"{port.Id}:{port.Name}"))}"));
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Output ports: {string.Join(", ", _state.OutputPorts.Select(port => $"{port.Id}:{port.Name}"))}"));
@@ -910,18 +1138,17 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void SelectGt001Port(ComboBox comboBox)
+    private bool TryGetDefaultGt001Ports(out MidiPortInfo inputPort, out MidiPortInfo outputPort)
     {
-        var item = comboBox.Items.OfType<MidiPortInfo>()
-            .FirstOrDefault(p => p.Name.Equals(MainGt001PortName, StringComparison.OrdinalIgnoreCase))
-            ?? comboBox.Items.OfType<MidiPortInfo>()
-                .FirstOrDefault(p => p.Name.Contains("GT-001", StringComparison.OrdinalIgnoreCase)
-                    && !p.Name.Contains("DAW CTRL", StringComparison.OrdinalIgnoreCase)
-                    && !p.Name.EndsWith(" CTRL", StringComparison.OrdinalIgnoreCase))
-            ?? comboBox.Items.OfType<MidiPortInfo>()
-                .FirstOrDefault(p => p.Name.Contains("BOSS", StringComparison.OrdinalIgnoreCase));
+        inputPort = FindDefaultGt001Port(_state.InputPorts);
+        outputPort = FindDefaultGt001Port(_state.OutputPorts);
+        return !string.IsNullOrWhiteSpace(inputPort.Id) && !string.IsNullOrWhiteSpace(outputPort.Id);
+    }
 
-        comboBox.SelectedItem = item ?? comboBox.Items.OfType<MidiPortInfo>().FirstOrDefault();
+    private static MidiPortInfo FindDefaultGt001Port(IEnumerable<MidiPortInfo> ports)
+    {
+        return ports.FirstOrDefault(port => port.Name.Equals(MainGt001PortName, StringComparison.OrdinalIgnoreCase))
+            ?? new MidiPortInfo(string.Empty, string.Empty);
     }
 
     private void BuildEffectChain()
@@ -1788,11 +2015,14 @@ public partial class MainWindow : Window
         HeaderControlsPanel.Visibility = Visibility.Collapsed;
         HeaderOnOffPanel.Visibility = Visibility.Collapsed;
         HeaderTypePanel.Visibility = Visibility.Collapsed;
+        HeaderExpPanel.Visibility = Visibility.Collapsed;
         HeaderOnOffCheckBox.Checked -= HeaderOnOffCheckBox_Changed;
         HeaderOnOffCheckBox.Unchecked -= HeaderOnOffCheckBox_Changed;
         HeaderTypeComboBox.SelectionChanged -= HeaderTypeComboBox_SelectionChanged;
+        HeaderExpComboBox.SelectionChanged -= HeaderExpComboBox_SelectionChanged;
         HeaderOnOffCheckBox.Tag = null;
         HeaderTypeComboBox.Tag = null;
+        HeaderExpComboBox.Tag = null;
 
         try
         {
@@ -1820,6 +2050,7 @@ public partial class MainWindow : Window
     {
         var onOffState = states.FirstOrDefault(state => IsOnOffParameter(state.Definition));
         var typeState = states.FirstOrDefault(state => IsPrimaryTypeParameter(state.Definition));
+        var expState = GetParameterState("exp.function");
 
         if (onOffState is not null)
         {
@@ -1839,7 +2070,16 @@ public partial class MainWindow : Window
             HeaderTypePanel.Visibility = Visibility.Visible;
         }
 
-        HeaderControlsPanel.Visibility = onOffState is not null || typeState is not null
+        if (expState is not null && expState.Definition.Options is { Count: > 0 } expOptions)
+        {
+            HeaderExpComboBox.Tag = expState.Definition;
+            HeaderExpComboBox.ItemsSource = expOptions;
+            HeaderExpComboBox.SelectedValue = expState.Value;
+            HeaderExpComboBox.SelectionChanged += HeaderExpComboBox_SelectionChanged;
+            HeaderExpPanel.Visibility = Visibility.Visible;
+        }
+
+        HeaderControlsPanel.Visibility = onOffState is not null || typeState is not null || expState is not null
             ? Visibility.Visible
             : Visibility.Collapsed;
     }
@@ -1868,6 +2108,19 @@ public partial class MainWindow : Window
             {
                 BuildParameterPanel();
             }
+        }
+    }
+
+    private void HeaderExpComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isBuildingParameterPanel || HeaderExpComboBox.Tag is not ParameterDefinition definition)
+        {
+            return;
+        }
+
+        if (HeaderExpComboBox.SelectedValue is int value)
+        {
+            SendPendingParameterNow(definition, value);
         }
     }
 
@@ -2027,6 +2280,11 @@ public partial class MainWindow : Window
             var typeValue = GetParameterValue(definition.Block == "FX1" ? "fx1.type" : "fx2.type");
             return _fxTypeParameterGroups.TryGetValue(typeValue, out var group)
                 && definition.Id.StartsWith($"{definition.Block.ToLowerInvariant()}.{group}.", StringComparison.Ordinal);
+        }
+
+        if (definition.Block == "PEDAL FX")
+        {
+            return !definition.Id.StartsWith("pedalFx.bend", StringComparison.Ordinal);
         }
 
         return true;
@@ -2323,7 +2581,7 @@ public partial class MainWindow : Window
 
         if (!_isConnected)
         {
-            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, "Connect MIDI ports before editing parameters."));
+            AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Error, "GT-001 is not connected; parameter edit skipped."));
             return;
         }
 
@@ -2453,41 +2711,22 @@ public partial class MainWindow : Window
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
         _isConnected = false;
+        _connectSequenceCts?.Cancel();
         _syncAwaitingReply = false;
+        _acceptTemporaryData = false;
         _isConnecting = false;
+        _connectInitialPatchSelectionScheduled = false;
         _isWritingPatch = false;
         _pendingWriteTarget = null;
         _pendingWriteName = string.Empty;
-        _syncTimeoutTimer?.Stop();
+        _pendingWriteData = null;
+        _pendingWriteDataReceived = null;
+        _syncSequenceCts?.Cancel();
         _writeTimeoutTimer?.Stop();
         _patchNameRequestTimer?.Stop();
         UpdateBusyIndicator();
         ClearParameterConfirmations();
         _midi.Dispose();
-    }
-
-    private void Disconnect()
-    {
-        _syncAwaitingReply = false;
-        _isConnecting = false;
-        _isWritingPatch = false;
-        _pendingWriteTarget = null;
-        _pendingWriteName = string.Empty;
-        _identityReplySeen = false;
-        _syncRequestedAfterConnect = false;
-        _syncRetryCount = 0;
-        _syncTimeoutTimer?.Stop();
-        _writeTimeoutTimer?.Stop();
-        _patchNameRequestTimer?.Stop();
-        _patchNameRequestTabs.Clear();
-        _patchNameRequestQueue.Clear();
-        UpdateBusyIndicator();
-        UpdateWriteButtonState();
-        ClearParameterConfirmations();
-        _midi.Close();
-        _isConnected = false;
-        ConnectionStatusButton.Content = "Disconnected";
-        ConnectButton.Content = "Connect";
     }
 
     private void ClearParameterConfirmations()

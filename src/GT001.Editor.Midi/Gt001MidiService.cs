@@ -5,8 +5,11 @@ namespace GT001.Editor.Midi;
 
 public sealed class Gt001MidiService : IDisposable
 {
+    private const int DataSetChunkPayloadSize = 241;
     private readonly IMidiTransport _transport;
     private readonly Gt001Protocol _protocol;
+    private readonly Dictionary<Gt001Address, string> _pendingRequestLabels = [];
+    private byte _deviceId = Gt001Constants.DefaultOutboundDeviceId;
     private bool _disposed;
 
     public Gt001MidiService(IMidiTransport transport, Gt001Protocol protocol)
@@ -19,9 +22,12 @@ public sealed class Gt001MidiService : IDisposable
     }
 
     public event EventHandler<AppLogEntry>? LogCreated;
-    public event EventHandler? IdentityConfirmed;
+    public event EventHandler<IdentityConfirmedEventArgs>? IdentityConfirmed;
     public event EventHandler<ParameterValueReceivedEventArgs>? TemporaryParameterReceived;
+    public event EventHandler<TemporaryParametersReceivedEventArgs>? TemporaryParametersReceived;
     public event EventHandler<TemporaryPatchDataReceivedEventArgs>? TemporaryPatchDataReceived;
+    public event EventHandler<TemporaryPatchChunkReceivedEventArgs>? TemporaryPatchChunkReceived;
+    public event EventHandler<TemporaryPatchNameReceivedEventArgs>? TemporaryPatchNameReceived;
     public event EventHandler<IReadOnlyList<byte>>? FxChainReceived;
     public event EventHandler<MidiPatchChangeEventArgs>? PatchChangeReceived;
     public event EventHandler<PatchNameReceivedEventArgs>? PatchNameReceived;
@@ -32,6 +38,8 @@ public sealed class Gt001MidiService : IDisposable
     public void Open(string inputPortId, string outputPortId)
     {
         _transport.Close();
+        _pendingRequestLabels.Clear();
+        _deviceId = Gt001Constants.DefaultOutboundDeviceId;
         _transport.Open(inputPortId, outputPortId);
         Log(AppLogDirection.Info, "MIDI ports opened.");
     }
@@ -39,17 +47,24 @@ public sealed class Gt001MidiService : IDisposable
     public void Close()
     {
         _transport.Close();
+        _pendingRequestLabels.Clear();
+        _deviceId = Gt001Constants.DefaultOutboundDeviceId;
         Log(AppLogDirection.Info, "MIDI ports closed.");
     }
 
-    public void RequestIdentity(string label = "Identity Request") => Send(_protocol.BuildIdentityRequest(), label);
+    public void RequestIdentity(byte deviceId = Gt001Constants.BroadcastDeviceId)
+        => Send(_protocol.BuildIdentityRequest(deviceId), deviceId == Gt001Constants.BroadcastDeviceId ? "RQ1 Identity" : $"RQ1 Identity device={deviceId:X2}");
+
+    public void SendEditorStartupStatus()
+        => Send(_protocol.BuildDataSet(new Gt001Address(0x7F, 0x00, 0x00, 0x01), [0x00], _deviceId), "DT1 Editor Startup Status");
 
     public void SendProgramChange(int programNumber, int channel = 0)
         => Send(_protocol.BuildProgramChange(programNumber, channel), $"Program Change {programNumber + 1}");
 
     public void SendPatchChange(int bankNumber, int programNumber, int channel = 0)
     {
-        Send(_protocol.BuildControlChange(0, bankNumber, channel), $"Bank Select {bankNumber}");
+        Send(_protocol.BuildControlChange(0, bankNumber, channel), $"Bank Select MSB {bankNumber}");
+        Send(_protocol.BuildControlChange(32, 0, channel), "Bank Select LSB 0");
         SendProgramChange(programNumber, channel);
     }
 
@@ -58,38 +73,39 @@ public sealed class Gt001MidiService : IDisposable
 
     public void SendPatchChangeToOutputPort(string outputPortId, int bankNumber, int programNumber, int channel = 0)
     {
-        SendToOutputPort(outputPortId, _protocol.BuildControlChange(0, bankNumber, channel), $"Bank Select {bankNumber}");
+        SendToOutputPort(outputPortId, _protocol.BuildControlChange(0, bankNumber, channel), $"Bank Select MSB {bankNumber}");
+        SendToOutputPort(outputPortId, _protocol.BuildControlChange(32, 0, channel), "Bank Select LSB 0");
         SendProgramChangeToOutputPort(outputPortId, programNumber, channel);
     }
 
     public void SendTemporaryParameter(ParameterDefinition definition, int value)
     {
         var data = definition.Encode(value);
-        Send(_protocol.BuildDataSet(definition.TemporaryPatchAddress, data), $"DT1 {definition.DisplayName}");
+        Send(_protocol.BuildDataSet(definition.TemporaryPatchAddress, data, _deviceId), $"DT1 {definition.DisplayName}");
     }
 
     public void RequestTemporaryParameter(ParameterDefinition definition)
     {
         var size = new Gt001Address(0x00, 0x00, 0x00, (byte)definition.Size);
-        Send(_protocol.BuildRequestData(definition.TemporaryPatchAddress, size), $"RQ1 {definition.DisplayName}");
+        SendRequest(definition.TemporaryPatchAddress, size, $"RQ1 {definition.DisplayName}", $"DT1 {definition.DisplayName}");
     }
 
     public void RequestModeledTemporaryPatch()
     {
         var size = TemporaryPatchParameters.GetModeledTemporaryPatchRequestSize();
-        Send(_protocol.BuildRequestData(Gt001Address.TemporaryPatchBase, size), $"RQ1 Temporary Patch ({size})");
+        SendRequest(Gt001Address.TemporaryPatchBase, size, "RQ1 Temporary Patch", "DT1 Temporary Patch");
     }
 
     public void RequestTemporaryPatchForWrite()
-        => Send(_protocol.BuildRequestData(Gt001Address.TemporaryPatchBase, PatchMemory.RegularPatchDataSize), $"RQ1 Temporary Patch Write Data ({PatchMemory.RegularPatchDataSize})");
+        => SendRequest(Gt001Address.TemporaryPatchBase, PatchMemory.RegularPatchDataSize, "RQ1 Temporary Patch Write Data", "DT1 Temporary Patch Write Data");
 
     public void RequestFxChain()
-        => Send(_protocol.BuildRequestData(FxChain.Address, FxChain.Size), "RQ1 FX Chain");
+        => SendRequest(FxChain.Address, FxChain.Size, "RQ1 FX Chain", "DT1 FX Chain");
 
     public void RequestPatchName(int bankNumber, int programNumber)
     {
         var address = PatchMemory.GetPatchAddress(bankNumber, programNumber);
-        Send(_protocol.BuildRequestData(address, new Gt001Address(0x00, 0x00, 0x00, 0x10)), $"RQ1 Patch Name bank={bankNumber} program={programNumber + 1}");
+        SendRequest(address, new Gt001Address(0x00, 0x00, 0x00, 0x10), "RQ1 Patch Name", "DT1 Patch Name");
     }
 
     public void WriteUserPatch(int bankNumber, int programNumber, IReadOnlyList<byte> patchData)
@@ -105,8 +121,21 @@ public sealed class Gt001MidiService : IDisposable
             throw new ArgumentException($"Patch data must contain at least {expectedSize} bytes.", nameof(patchData));
         }
 
-        var address = PatchMemory.GetPatchAddress(bankNumber, programNumber);
-        Send(_protocol.BuildDataSet(address, patchData.Take(expectedSize).ToArray()), $"DT1 Write User Patch bank={bankNumber} program={programNumber + 1}");
+        var baseAddress = PatchMemory.GetPatchAddress(bankNumber, programNumber);
+        var data = patchData.Take(expectedSize).ToArray();
+        var chunkCount = (data.Length + DataSetChunkPayloadSize - 1) / DataSetChunkPayloadSize;
+        for (var offset = 0; offset < data.Length; offset += DataSetChunkPayloadSize)
+        {
+            var chunk = data
+                .Skip(offset)
+                .Take(DataSetChunkPayloadSize)
+                .ToArray();
+            var address = Gt001Address.FromLinearValue(baseAddress.ToLinearValue() + offset);
+            Send(
+                _protocol.BuildDataSet(address, chunk, _deviceId),
+                $"DT1 Write User Patch bank={bankNumber} program={programNumber + 1} chunk={(offset / DataSetChunkPayloadSize) + 1}/{chunkCount}");
+            Thread.Sleep(20);
+        }
     }
 
     public void SendFxChain(IReadOnlyList<byte> positions)
@@ -121,7 +150,7 @@ public sealed class Gt001MidiService : IDisposable
             throw new ArgumentException("FX chain positions must not conflict.", nameof(positions));
         }
 
-        Send(_protocol.BuildDataSet(FxChain.Address, positions), "DT1 FX Chain");
+        Send(_protocol.BuildDataSet(FxChain.Address, positions, _deviceId), "DT1 FX Chain");
     }
 
     public void RequestTemporaryParameters(IEnumerable<ParameterDefinition> definitions)
@@ -152,6 +181,12 @@ public sealed class Gt001MidiService : IDisposable
         Log(AppLogDirection.Outbound, label, bytes);
     }
 
+    private void SendRequest(Gt001Address address, Gt001Address size, string requestLabel, string responseLabel)
+    {
+        _pendingRequestLabels[address] = responseLabel;
+        Send(_protocol.BuildRequestData(address, size, _deviceId), requestLabel);
+    }
+
     private void SendToOutputPort(string outputPortId, byte[] bytes, string label)
     {
         _transport.SendToOutputPort(outputPortId, bytes);
@@ -160,59 +195,93 @@ public sealed class Gt001MidiService : IDisposable
 
     private void OnMessageReceived(object? sender, byte[] bytes)
     {
-        Log(AppLogDirection.Inbound, "MIDI received", bytes);
         if (_protocol.IsGt001IdentityReply(bytes))
         {
-            IdentityConfirmed?.Invoke(this, EventArgs.Empty);
+            _deviceId = bytes[2];
+            Log(AppLogDirection.Inbound, "DT1 Identity", bytes);
+            IdentityConfirmed?.Invoke(this, new IdentityConfirmedEventArgs(_deviceId));
+            return;
         }
 
-        if (_protocol.TryParseDataSet(bytes, out var message) && message is not null)
+        if (!_protocol.TryParseDataSet(bytes, out var message) || message is null)
         {
-            if (TryDecodePatchName(message, out var patchName)
-                && patchName is not null)
+            Log(AppLogDirection.Inbound, "MIDI unrecognized", bytes);
+            return;
+        }
+
+        Log(AppLogDirection.Inbound, GetInboundDataSetLabel(message), bytes);
+
+        if (TryDecodePatchName(message, out var patchName)
+            && patchName is not null)
+        {
+            PatchNameReceived?.Invoke(this, patchName);
+            return;
+        }
+
+        if (TryDecodeTemporaryPatchName(message, out var temporaryPatchName))
+        {
+            TemporaryPatchNameReceived?.Invoke(this, new TemporaryPatchNameReceivedEventArgs(temporaryPatchName));
+        }
+
+        if (PatchMemory.IsTemporaryPatchAddress(message.Address))
+        {
+            TemporaryPatchChunkReceived?.Invoke(this, new TemporaryPatchChunkReceivedEventArgs(message.Address, message.Payload));
+        }
+
+        if (message.Address == Gt001Address.TemporaryPatchBase
+            && message.Payload.Length >= PatchMemory.RegularPatchDataSize.ToLinearValue())
+        {
+            TemporaryPatchDataReceived?.Invoke(this, new TemporaryPatchDataReceivedEventArgs(message.Payload));
+        }
+
+        if (FxChain.TryDecode(message.Address, message.Payload, out var fxChainPositions))
+        {
+            FxChainReceived?.Invoke(this, fxChainPositions);
+        }
+
+        IReadOnlyList<ParameterValueSnapshot> values;
+        try
+        {
+            values = TemporaryPatchParameters.DecodeFromDataSet(message);
+        }
+        catch (Exception ex)
+        {
+            Log(AppLogDirection.Error, $"Could not decode DT1 at {message.Address}: {ex.Message}");
+            return;
+        }
+
+        if (values.Count == 0)
+        {
+            if (PatchMemory.IsModeledTemporaryPatchAddress(message.Address))
             {
-                PatchNameReceived?.Invoke(this, patchName);
+                Log(AppLogDirection.Info, $"DT1 temporary patch data at {message.Address} is outside the currently modeled editor parameters ({message.Payload.Length} byte payload).");
+            }
+            else
+            {
+                Log(AppLogDirection.Info, $"DT1 device data at {message.Address} is outside the currently modeled editor parameters ({message.Payload.Length} byte payload).");
             }
 
-            if (message.Address == Gt001Address.TemporaryPatchBase
-                && message.Payload.Length >= PatchMemory.RegularPatchDataSize.ToLinearValue())
-            {
-                TemporaryPatchDataReceived?.Invoke(this, new TemporaryPatchDataReceivedEventArgs(message.Payload));
-            }
+            return;
+        }
 
-            if (FxChain.TryDecode(message.Address, message.Payload, out var fxChainPositions))
-            {
-                FxChainReceived?.Invoke(this, fxChainPositions);
-            }
-
-            IReadOnlyList<ParameterValueSnapshot> values;
+        var receivedValues = new List<ParameterValueReceivedEventArgs>(values.Count);
+        foreach (var snapshot in values)
+        {
             try
             {
-                values = TemporaryPatchParameters.DecodeFromDataSet(message);
+                var args = new ParameterValueReceivedEventArgs(snapshot.Definition, snapshot.Value, bytes);
+                receivedValues.Add(args);
+                TemporaryParameterReceived?.Invoke(this, args);
             }
             catch (Exception ex)
             {
-                Log(AppLogDirection.Error, $"Could not decode DT1 at {message.Address}: {ex.Message}");
-                return;
+                Log(AppLogDirection.Error, $"Could not apply {snapshot.Definition.DisplayName}: {ex.Message}");
             }
+        }
 
-            if (values.Count == 0)
-            {
-                Log(AppLogDirection.Info, $"DT1 parsed at {message.Address}, no modeled parameters in {message.Payload.Length} byte payload.");
-                return;
-            }
-
-            foreach (var snapshot in values)
-            {
-                try
-                {
-                    TemporaryParameterReceived?.Invoke(this, new ParameterValueReceivedEventArgs(snapshot.Definition, snapshot.Value, bytes));
-                }
-                catch (Exception ex)
-                {
-                    Log(AppLogDirection.Error, $"Could not apply {snapshot.Definition.DisplayName}: {ex.Message}");
-                }
-            }
+        if (receivedValues.Count > 0)
+        {
+            TemporaryParametersReceived?.Invoke(this, new TemporaryParametersReceivedEventArgs(receivedValues));
         }
     }
 
@@ -224,6 +293,42 @@ public sealed class Gt001MidiService : IDisposable
     private void OnTransportPatchChangeReceived(object? sender, MidiPatchChangeEventArgs e)
     {
         PatchChangeReceived?.Invoke(this, e);
+    }
+
+    private string GetInboundDataSetLabel(Gt001SysExMessage message)
+    {
+        if (_pendingRequestLabels.Remove(message.Address, out var responseLabel))
+        {
+            return responseLabel;
+        }
+
+        if (FxChain.TryDecode(message.Address, message.Payload, out _))
+        {
+            return "DT1 FX Chain";
+        }
+
+        if (TryDecodePatchName(message, out _))
+        {
+            return "DT1 Patch Name";
+        }
+
+        if (message.Address == Gt001Address.TemporaryPatchBase)
+        {
+            return "DT1 Temporary Patch";
+        }
+
+        var parameter = TemporaryPatchParameters.FindByTemporaryPatchAddress(message.Address);
+        if (parameter is not null)
+        {
+            return $"DT1 {parameter.DisplayName}";
+        }
+
+        if (PatchMemory.IsTemporaryPatchAddress(message.Address))
+        {
+            return $"DT1 Temporary Patch Data {message.Address}";
+        }
+
+        return $"DT1 {message.Address}";
     }
 
     private static bool TryDecodePatchName(Gt001SysExMessage message, out PatchNameReceivedEventArgs? patchName)
@@ -260,6 +365,25 @@ public sealed class Gt001MidiService : IDisposable
 
         patchName = new PatchNameReceivedEventArgs(bankNumber, programNumber, name);
         return true;
+    }
+
+    private static bool TryDecodeTemporaryPatchName(Gt001SysExMessage message, out string name)
+    {
+        name = string.Empty;
+        if (message.Address != Gt001Address.TemporaryPatchBase || message.Payload.Length < 16)
+        {
+            return false;
+        }
+
+        name = DecodePatchName(message.Payload);
+        return true;
+    }
+
+    private static string DecodePatchName(IEnumerable<byte> bytes)
+    {
+        return new string(bytes.Take(16)
+            .Select(value => value is >= 0x20 and <= 0x7D ? (char)value : ' ')
+            .ToArray()).TrimEnd();
     }
 
     private void Log(AppLogDirection direction, string message, byte[]? bytes = null)

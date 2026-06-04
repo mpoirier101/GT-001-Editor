@@ -17,16 +17,38 @@ public sealed class DryWetMidiTransport : IMidiTransport
 
     public IReadOnlyList<MidiPortInfo> GetInputPorts()
     {
-        return InputDevice.GetAll()
-            .Select((device, index) => new MidiPortInfo(index.ToString(), device.Name))
-            .ToArray();
+        var devices = InputDevice.GetAll();
+        try
+        {
+            return devices
+                .Select((device, index) => new MidiPortInfo(index.ToString(), device.Name))
+                .ToArray();
+        }
+        finally
+        {
+            foreach (var device in devices)
+            {
+                device.Dispose();
+            }
+        }
     }
 
     public IReadOnlyList<MidiPortInfo> GetOutputPorts()
     {
-        return OutputDevice.GetAll()
-            .Select((device, index) => new MidiPortInfo(index.ToString(), device.Name))
-            .ToArray();
+        var devices = OutputDevice.GetAll();
+        try
+        {
+            return devices
+                .Select((device, index) => new MidiPortInfo(index.ToString(), device.Name))
+                .ToArray();
+        }
+        finally
+        {
+            foreach (var device in devices)
+            {
+                device.Dispose();
+            }
+        }
     }
 
     public void Open(string inputPortId, string outputPortId)
@@ -43,6 +65,8 @@ public sealed class DryWetMidiTransport : IMidiTransport
 
         _output = OutputDevice.GetByIndex(int.Parse(outputPortId));
         DiagnosticCreated?.Invoke(this, $"Opening output '{_output.Name}'.");
+        _output.PrepareForEventsSending();
+        DiagnosticCreated?.Invoke(this, "Output prepared for MIDI event sending.");
     }
 
     public void Close()
@@ -50,6 +74,12 @@ public sealed class DryWetMidiTransport : IMidiTransport
         if (_input is not null)
         {
             DiagnosticCreated?.Invoke(this, $"Closing input '{_input.Name}'. IsListeningForEvents={_input.IsListeningForEvents}.");
+            if (_input.IsListeningForEvents)
+            {
+                _input.StopEventsListening();
+                DiagnosticCreated?.Invoke(this, $"Input listening stopped. IsListeningForEvents={_input.IsListeningForEvents}.");
+            }
+
             _input.EventReceived -= OnEventReceived;
             _input.ErrorOccurred -= OnErrorOccurred;
             _input.Dispose();

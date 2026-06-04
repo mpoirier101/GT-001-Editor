@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <Content Include="..\..\GTe.ico" Link="GTe.ico" CopyToOutputDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.0.1" />
     <ProjectReference Include="..\GT001.Editor.Core\GT001.Editor.Core.csproj" />
     <ProjectReference Include="..\GT001.Editor.Midi\GT001.Editor.Midi.csproj" />
@@ -15,6 +16,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWinUI>true</UseWinUI>
+    <ApplicationIcon>..\..\GTe.ico</ApplicationIcon>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>

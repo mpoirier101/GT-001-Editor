@@ -17,7 +17,8 @@ public sealed class Gt001ProtocolTests
     {
         var protocol = new Gt001Protocol();
 
-        Assert.Equal([0xF0, 0x7E, 0x00, 0x06, 0x01, 0xF7], protocol.BuildIdentityRequest());
+        Assert.Equal([0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7], protocol.BuildIdentityRequest());
+        Assert.Equal([0xF0, 0x7E, 0x00, 0x06, 0x01, 0xF7], protocol.BuildIdentityRequest(0x00));
     }
 
     [Fact]
@@ -46,13 +47,23 @@ public sealed class Gt001ProtocolTests
 
         Assert.Equal(0xF0, bytes[0]);
         Assert.Equal(0x41, bytes[1]);
-        Assert.Equal(0x7F, bytes[2]);
+        Assert.Equal(0x00, bytes[2]);
         Assert.Equal([0x00, 0x00, 0x00, 0x06], bytes.Skip(3).Take(4).ToArray());
         Assert.Equal(0x12, bytes[7]);
         Assert.Equal([0x60, 0x00, 0x00, 0x30], bytes.Skip(8).Take(4).ToArray());
         Assert.Equal(0x01, bytes[12]);
         Assert.Equal(0x6F, bytes[^2]);
         Assert.Equal(0xF7, bytes[^1]);
+    }
+
+    [Fact]
+    public void BuildsObservedEditorStartupStatus()
+    {
+        var protocol = new Gt001Protocol();
+
+        var bytes = protocol.BuildDataSet(new Gt001Address(0x7F, 0x00, 0x00, 0x01), [0x00], deviceId: 0x00);
+
+        Assert.Equal([0xF0, 0x41, 0x00, 0x00, 0x00, 0x00, 0x06, 0x12, 0x7F, 0x00, 0x00, 0x01, 0x00, 0x00, 0xF7], bytes);
     }
 
     [Fact]
@@ -155,6 +166,16 @@ public sealed class Gt001ProtocolTests
 
         Assert.Equal([0x60, 0x00, 0x07, 0x20], bytes.Skip(8).Take(4).ToArray());
         Assert.Equal([0x00, 0x00, 0x00, 0x14], bytes.Skip(12).Take(4).ToArray());
+    }
+
+    [Fact]
+    public void ModeledTemporaryPatchRangeIncludesFxChainAndExpFunction()
+    {
+        Assert.True(PatchMemory.IsTemporaryPatchAddress(FxChain.Address));
+        Assert.True(PatchMemory.IsModeledTemporaryPatchAddress(Gt001Address.TemporaryPatchBase));
+        Assert.True(PatchMemory.IsModeledTemporaryPatchAddress(new Gt001Address(0x60, 0x00, 0x05, 0x53)));
+        Assert.True(PatchMemory.IsModeledTemporaryPatchAddress(FxChain.Address));
+        Assert.True(PatchMemory.IsModeledTemporaryPatchAddress(new Gt001Address(0x60, 0x00, 0x08, 0x10)));
     }
 
     [Fact]

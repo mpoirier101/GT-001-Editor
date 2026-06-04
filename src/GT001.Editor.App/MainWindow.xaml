@@ -3,7 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="GT-001 Editor">
-    <Grid x:Name="RootGrid" Background="{StaticResource AppBackground}">
+    <Grid x:Name="RootGrid" Background="{StaticResource AppBackground}" Loaded="RootGrid_Loaded">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="250" />
             <ColumnDefinition Width="*" />
@@ -72,30 +72,10 @@
                             Click="WritePatch_Click"
                             Padding="12,6"
                             Background="{StaticResource WarmBrush}" />
-                    <Button x:Name="ConnectionStatusButton"
-                            Content="Disconnected"
-                            Foreground="{StaticResource MutedTextBrush}"
-                            Background="{StaticResource PanelBackground}">
-                        <Button.Flyout>
-                            <Flyout Placement="Bottom">
-                                <StackPanel Width="320" Spacing="12">
-                                    <TextBlock Text="MIDI Connection" FontSize="18" FontWeight="SemiBold" />
-                                    <StackPanel>
-                                        <TextBlock Text="Input Port" Foreground="{StaticResource MutedTextBrush}" />
-                                        <ComboBox x:Name="InputPortsCombo" DisplayMemberPath="Name" SelectedValuePath="Id" HorizontalAlignment="Stretch" />
-                                    </StackPanel>
-                                    <StackPanel>
-                                        <TextBlock Text="Output Port" Foreground="{StaticResource MutedTextBrush}" />
-                                        <ComboBox x:Name="OutputPortsCombo" DisplayMemberPath="Name" SelectedValuePath="Id" HorizontalAlignment="Stretch" />
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-                                        <Button Content="Refresh" Click="RefreshPorts_Click" />
-                                        <Button x:Name="ConnectButton" Content="Connect" Click="Connect_Click" Background="{StaticResource AccentBrush}" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Flyout>
-                        </Button.Flyout>
-                    </Button>
+                    <TextBlock x:Name="ConnectionStatusText"
+                               Text="Starting..."
+                               Foreground="{StaticResource MutedTextBrush}"
+                               VerticalAlignment="Center" />
                 </StackPanel>
             </Grid>
 
@@ -178,6 +158,18 @@
                                           DisplayMemberPath="Label"
                                           SelectedValuePath="Value"
                                           MinWidth="132"
+                                          VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel x:Name="HeaderExpPanel"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed">
+                                <TextBlock Text="EXP" FontSize="18" VerticalAlignment="Center" />
+                                <ComboBox x:Name="HeaderExpComboBox"
+                                          DisplayMemberPath="Label"
+                                          SelectedValuePath="Value"
+                                          MinWidth="150"
                                           VerticalAlignment="Center" />
                             </StackPanel>
                         </StackPanel>

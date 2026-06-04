@@ -2,7 +2,15 @@ namespace GT001.Editor.Protocol;
 
 public sealed class Gt001Protocol
 {
-    public byte[] BuildIdentityRequest() => Gt001Constants.IdentityRequest.ToArray();
+    public byte[] BuildIdentityRequest(byte deviceId = Gt001Constants.BroadcastDeviceId)
+    {
+        if (deviceId > 0x7F)
+        {
+            throw new ArgumentOutOfRangeException(nameof(deviceId), "MIDI device id must be a 7-bit value.");
+        }
+
+        return [0xF0, 0x7E, deviceId, 0x06, 0x01, 0xF7];
+    }
 
     public byte[] BuildProgramChange(int programNumber, int channel = 0)
     {

@@ -8,6 +8,17 @@ public static class PatchMemory
 
     public static Gt001Address RegularPatchDataSize { get; } = new(0x00, 0x00, 0x0A, 0x31);
 
+    public static bool IsTemporaryPatchAddress(Gt001Address address)
+        => address.B0 == Gt001Address.TemporaryPatchBase.B0;
+
+    public static bool IsModeledTemporaryPatchAddress(Gt001Address address)
+    {
+        var start = Gt001Address.TemporaryPatchBase.ToLinearValue();
+        var end = start + TemporaryPatchParameters.GetModeledTemporaryPatchRequestSize().ToLinearValue();
+        var value = address.ToLinearValue();
+        return value >= start && value < end;
+    }
+
     public static Gt001Address GetPatchAddress(int bankNumber, int programNumber)
     {
         var absolutePatchIndex = (bankNumber * ProgramsPerBank) + programNumber;
