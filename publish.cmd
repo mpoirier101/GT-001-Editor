@@ -51,6 +51,8 @@ git commit -m "Release %VERSION%"
 if errorlevel 1 (
   echo No Git commit was created. This is OK if there were no source changes.
 )
+git pull --rebase
+if errorlevel 1 goto error
 git push
 if errorlevel 1 goto error
 
