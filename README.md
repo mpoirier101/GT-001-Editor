@@ -72,9 +72,10 @@ dotnet publish src\GT001.Editor.App\GT001.Editor.App.csproj -c Release -r win-x6
 ## Basic Use
 
 1. Connect the GT-001 over USB.
-2. Select a patch from the User or Factory tabs.
-3. Edit parameters in the main panel.
-4. Click `WRITE` to save the current temporary patch to a User patch number and name.
+2. Start GTe editor.
+3. Select a patch from the User or Factory tabs.
+4. Edit parameters in the main panel.
+5. Click `WRITE` to save the current temporary patch to a User patch number and name.
 
 ## Repository Notes
 
