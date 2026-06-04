@@ -25,5 +25,5 @@ coverage/
 # reference extracts in the public repository.
 reference/
 screenshots/
-
+publish.cmd
 *.apmx86
