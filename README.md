@@ -4,7 +4,7 @@ Unofficial Windows desktop editor for the BOSS GT-001 guitar effects processor.
 
 GT-001 Editor focuses on the everyday patch workflow: select a patch, edit the temporary patch buffer over USB MIDI, and write the result back to a User patch slot when you are ready.
 
-<img width="1916" height="1293" alt="image" src="https://github.com/user-attachments/assets/713ba7f3-2582-4572-8fa6-37e253eed12c" />
+![GT-001 Editor screenshot](docs/assets/gt001-editor-screenshot.png)
 
 
 ## Status
