@@ -30,7 +30,7 @@ Currently out of scope:
 ## Requirements
 
 - Windows 10 version 2004 or newer, or Windows 11.
-- .NET 8 SDK for building from source.
+- .NET 10 SDK for building from source.
 - BOSS GT-001 connected over USB.
 - GT-001 MIDI receive channel set to channel 1.
 
@@ -85,7 +85,6 @@ The source code contains independently modeled parameter metadata needed by the 
 
 ## Third-Party Components
 
-- [DryWetMIDI](https://github.com/melanchall/drywetmidi) for MIDI access.
 - Microsoft Windows App SDK / WinUI for the desktop UI.
 
 Third-party packages remain under their own licenses.
