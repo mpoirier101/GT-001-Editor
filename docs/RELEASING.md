@@ -12,10 +12,14 @@ This is a simple manual release checklist for GitHub.
 ## Build a Release Folder
 
 ```powershell
-dotnet publish src\GT001.Editor.App\GT001.Editor.App.csproj -c Release -r win-x64 --self-contained false -o publish\GT001.Editor
+dotnet restore GT001.Editor.sln --configfile NuGet.Config
+dotnet test GT001.Editor.sln --no-restore
+dotnet publish src\GT001.Editor.App\GT001.Editor.App.csproj -c Release -r win-x64 --self-contained true -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:DebugType=none -p:DebugSymbols=false -o artifacts\release\GT001.Editor-vX.Y.Z-win-x64
 ```
 
-Zip the contents of `publish\GT001.Editor` for the GitHub release.
+Zip the contents of the release folder for the GitHub release.
+
+For local installs, copy the release folder contents to `C:\Apps\GT-001`. The app install folder is only a publish destination; builds should run from the source checkout.
 
 ## Release Notes Template
 
