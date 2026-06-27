@@ -85,6 +85,7 @@ The source code contains independently modeled parameter metadata needed by the 
 
 ## Third-Party Components
 
+- [DryWetMIDI](https://github.com/melanchall/drywetmidi) for MIDI access.
 - Microsoft Windows App SDK / WinUI for the desktop UI.
 
 Third-party packages remain under their own licenses.
