@@ -11,10 +11,11 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Version>0.2.1</Version>
-    <AssemblyVersion>0.2.1.0</AssemblyVersion>
-    <FileVersion>0.2.1.0</FileVersion>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Version>0.3.0</Version>
+    <AssemblyVersion>0.3.0.0</AssemblyVersion>
+    <FileVersion>0.3.0.0</FileVersion>
+    <SatelliteResourceLanguages>en-US</SatelliteResourceLanguages>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -36,6 +37,17 @@
       DestinationFolder="$(PublishDir)"
       SkipUnchangedFiles="true"
       Condition="Exists('%(_WinUIResourceFiles.Identity)')" />
+  </Target>
+
+  <Target Name="TrimWinUILocalizedResources" AfterTargets="Publish">
+    <ItemGroup>
+      <_WinUILocalizedResourceFiles
+        Include="$(PublishDir)*\Microsoft.ui.xaml.dll.mui;$(PublishDir)*\Microsoft.UI.Xaml.Phone.dll.mui"
+        Exclude="$(PublishDir)en-us\**" />
+      <_WinUILocalizedResourceDirectories Include="@(_WinUILocalizedResourceFiles->'%(RootDir)%(Directory)')" />
+    </ItemGroup>
+    <Delete Files="@(_WinUILocalizedResourceFiles)" />
+    <RemoveDir Directories="@(_WinUILocalizedResourceDirectories)" />
   </Target>
 
 </Project>
