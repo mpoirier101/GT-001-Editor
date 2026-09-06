@@ -9,7 +9,7 @@ GT-001 Editor focuses on the everyday patch workflow: select a patch, edit the t
 
 ## Status
 
-This project is a public beta. It has been tested against real GT-001 hardware, but it is still young software that sends MIDI SysEx write messages to your device.
+Version 1.0.0 has been validated against real GT-001 hardware. It sends MIDI SysEx write messages to your device, so use WRITE deliberately.
 
 Working areas:
 
@@ -30,7 +30,8 @@ Currently out of scope:
 ## Requirements
 
 - Windows 10 version 2004 or newer, or Windows 11.
-- .NET 8 SDK for building from source.
+- .NET 10 SDK for building from source.
+- .NET 10 Windows Desktop Runtime for the installed application.
 - BOSS GT-001 connected over USB.
 - GT-001 MIDI receive channel set to channel 1.
 
@@ -71,6 +72,8 @@ dotnet publish src\GT001.Editor.App\GT001.Editor.App.csproj -c Release -r win-x6
 
 ## Basic Use
 
+The editor stores its logs and future per-user settings under `%LocalAppData%\GT-001`.
+
 1. Connect the GT-001 over USB.
 2. Start GTe editor.
 3. Select a patch from the User or Factory tabs.
@@ -83,12 +86,9 @@ The `reference/` and `screenshots/` folders are ignored intentionally. Do not co
 
 The source code contains independently modeled parameter metadata needed by the editor, but this repository should not include the vendor PDFs themselves.
 
-## Third-Party Components
+## Desktop Runtime
 
-- [DryWetMIDI](https://github.com/melanchall/drywetmidi) for MIDI access.
-- Microsoft Windows App SDK / WinUI for the desktop UI.
-
-Third-party packages remain under their own licenses.
+The editor uses WPF and the built-in Windows WinMM MIDI API. The installer is framework-dependent and does not bundle the .NET runtime.
 
 ## Disclaimer
 

@@ -3,13 +3,11 @@ using System.IO;
 using GT001.Editor.Core;
 using GT001.Editor.Midi;
 using GT001.Editor.Protocol;
-using Microsoft.UI;
-using Microsoft.UI.Windowing;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
-using Windows.Graphics;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace GT001.Editor.App;
 
@@ -201,7 +199,7 @@ public partial class MainWindow : Window
     private string? _dragInsertLane;
     private bool _dragInsertLaneAfterLastModule;
     private bool _dragInsertAfterLastModule;
-    private global::Windows.Foundation.Point _dragStartPoint;
+    private Point _dragStartPoint;
     private bool _isModuleDragging;
     private bool _isUpdatingPatchSelectionFromDevice;
     private Border? _dragSourceTile;
@@ -239,26 +237,24 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "GTe.ico"));
-        AppWindow.Resize(new SizeInt32(InitialWindowWidth, InitialWindowHeight));
-        if (AppWindow.Presenter is OverlappedPresenter presenter)
-        {
-            presenter.PreferredMinimumWidth = InitialWindowWidth;
-            presenter.PreferredMinimumHeight = InitialWindowHeight;
-        }
+        Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(Path.Combine(AppContext.BaseDirectory, "GTe.ico")));
+        Width = InitialWindowWidth;
+        Height = InitialWindowHeight;
+        MinWidth = InitialWindowWidth;
+        MinHeight = InitialWindowHeight;
         Closed += MainWindow_Closed;
         _logFilePath = CreateLogFilePath();
 
         _midi = new Gt001MidiService(new WinMmMidiTransport(), new Gt001Protocol());
-        _midi.LogCreated += (_, entry) => DispatcherQueue.TryEnqueue(() => AddLog(entry));
-        _midi.PatchChangeReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        _midi.LogCreated += (_, entry) => InvokeOnUi(() => AddLog(entry));
+        _midi.PatchChangeReceived += (_, args) => InvokeOnUi(() =>
         {
             _patchSelectionCompletion?.TrySetResult(args);
             SelectPatchFromDevice(args.BankNumber, args.ProgramNumber);
         });
-        _midi.PatchNameReceived += (_, args) => DispatcherQueue.TryEnqueue(() => ApplyPatchName(args.BankNumber, args.ProgramNumber, args.Name));
-        _midi.TemporaryPatchDataReceived += (_, args) => DispatcherQueue.TryEnqueue(() => CompletePendingWrite(args.Payload));
-        _midi.TemporaryPatchChunkReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        _midi.PatchNameReceived += (_, args) => InvokeOnUi(() => ApplyPatchName(args.BankNumber, args.ProgramNumber, args.Name));
+        _midi.TemporaryPatchDataReceived += (_, args) => InvokeOnUi(() => CompletePendingWrite(args.Payload));
+        _midi.TemporaryPatchChunkReceived += (_, args) => InvokeOnUi(() =>
         {
             if (_isWritingPatch)
             {
@@ -270,14 +266,14 @@ public partial class MainWindow : Window
                 TrackTemporaryPatchSyncChunk(args.Address, args.Payload);
             }
         });
-        _midi.TemporaryPatchNameReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        _midi.TemporaryPatchNameReceived += (_, args) => InvokeOnUi(() =>
         {
             if (ShouldAcceptTemporaryData())
             {
                 ApplyTemporaryPatchName(args.Name);
             }
         });
-        _midi.FxChainReceived += (_, positions) => DispatcherQueue.TryEnqueue(() =>
+        _midi.FxChainReceived += (_, positions) => InvokeOnUi(() =>
         {
             if (!ShouldAcceptTemporaryData())
             {
@@ -288,7 +284,7 @@ public partial class MainWindow : Window
             MarkFxChainSynced();
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"Synced FX chain: {string.Join(" ", positions.Select(value => value.ToString("X2")))}"));
         });
-        _midi.IdentityConfirmed += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        _midi.IdentityConfirmed += (_, args) => InvokeOnUi(() =>
         {
             _identityReplyCount++;
             _identityCompletion?.TrySetResult(args.DeviceId);
@@ -300,7 +296,7 @@ public partial class MainWindow : Window
             ConnectionStatusText.Text = "GT-001 identified";
             AddLog(new AppLogEntry(DateTimeOffset.Now, AppLogDirection.Info, $"GT-001 identity reply {_identityReplyCount} confirmed; device id={args.DeviceId:X2}."));
         });
-        _midi.TemporaryParametersReceived += (_, args) => DispatcherQueue.TryEnqueue(() =>
+        _midi.TemporaryParametersReceived += (_, args) => InvokeOnUi(() =>
         {
             if (ShouldAcceptTemporaryData())
             {
@@ -322,6 +318,17 @@ public partial class MainWindow : Window
     {
         RootGrid.Loaded -= RootGrid_Loaded;
         StartAutomaticConnection();
+    }
+
+    private void InvokeOnUi(Action action)
+    {
+        if (Dispatcher.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        _ = Dispatcher.InvokeAsync(action, DispatcherPriority.Normal);
     }
 
     private static PatchSlot[] BuildPatchSlots(string group, string prefix, int firstBankNumber)
@@ -647,29 +654,17 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
-        var content = new StackPanel { Spacing = 12, Width = 360 };
-        content.Children.Add(new TextBlock { Text = "User Patch" });
-        content.Children.Add(targetCombo);
-        content.Children.Add(new TextBlock { Text = "Patch Name" });
-        content.Children.Add(nameBox);
-
-        var dialog = new ContentDialog
-        {
-            XamlRoot = RootGrid.XamlRoot,
-            Title = "Write patch?",
-            Content = content,
-            PrimaryButtonText = "Write",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary
-        };
-
-        var result = await dialog.ShowAsync();
-        if (result != ContentDialogResult.Primary || targetCombo.SelectedItem is not PatchSlot targetSlot)
+        var result = MessageBox.Show(
+            $"Write the current TEMP patch to {selectedSlot.Number}?\n\nPatch name: {nameBox.Text}",
+            "Write patch?",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning);
+        if (result != MessageBoxResult.OK)
         {
             return null;
         }
 
-        return new PatchWriteTarget(targetSlot, NormalizePatchName(nameBox.Text));
+        return new PatchWriteTarget(selectedSlot, NormalizePatchName(nameBox.Text));
     }
 
     private void StartWriteTimeout()
@@ -1206,11 +1201,10 @@ public partial class MainWindow : Window
             Tag = module.Id,
             Child = BuildModuleButtonContent(module, isSelected)
         };
-        tile.PointerPressed += ModuleTile_PointerPressed;
-        tile.PointerMoved += ModuleTile_PointerMoved;
-        tile.PointerReleased += ModuleTile_PointerReleased;
-        tile.PointerCanceled += ModuleTile_PointerCanceled;
-        tile.Tapped += ModuleTile_Tapped;
+        tile.MouseLeftButtonDown += ModuleTile_MouseLeftButtonDown;
+        tile.MouseMove += ModuleTile_MouseMove;
+        tile.MouseLeftButtonUp += ModuleTile_MouseLeftButtonUp;
+        tile.MouseLeave += ModuleTile_MouseLeave;
         return tile;
     }
 
@@ -1285,11 +1279,10 @@ public partial class MainWindow : Window
                 VerticalAlignment = VerticalAlignment.Center
             }
         };
-        tile.PointerPressed += ModuleTile_PointerPressed;
-        tile.PointerMoved += ModuleTile_PointerMoved;
-        tile.PointerReleased += ModuleTile_PointerReleased;
-        tile.PointerCanceled += ModuleTile_PointerCanceled;
-        tile.Tapped += ModuleTile_Tapped;
+        tile.MouseLeftButtonDown += ModuleTile_MouseLeftButtonDown;
+        tile.MouseMove += ModuleTile_MouseMove;
+        tile.MouseLeftButtonUp += ModuleTile_MouseLeftButtonUp;
+        tile.MouseLeave += ModuleTile_MouseLeave;
         return tile;
     }
 
@@ -1304,7 +1297,7 @@ public partial class MainWindow : Window
         BottomChannelDropZone.BorderThickness = new Thickness(0);
     }
 
-    private void DivMixContainer_Tapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+    private void DivMixContainer_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => e.Handled = true;
 
     private void ContainerModule_Click(object sender, RoutedEventArgs e)
     {
@@ -1337,7 +1330,6 @@ public partial class MainWindow : Window
         var isOn = IsModuleOn(module);
         var content = new StackPanel
         {
-            Spacing = 2,
             Children =
             {
                 new TextBlock
@@ -1353,7 +1345,7 @@ public partial class MainWindow : Window
         return content;
     }
 
-    private void ModuleTile_PointerPressed(object sender, PointerRoutedEventArgs e)
+    private void ModuleTile_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not Border { Tag: string moduleId } tile)
         {
@@ -1365,34 +1357,28 @@ public partial class MainWindow : Window
             return;
         }
 
-        var point = e.GetCurrentPoint(EffectChainPanel);
-        if (!point.Properties.IsLeftButtonPressed)
-        {
-            return;
-        }
-
         _draggedModuleId = moduleId;
         _dragSourceTile = tile;
-        _dragStartPoint = point.Position;
+        _dragStartPoint = e.GetPosition(EffectChainPanel);
         _isModuleDragging = false;
-        tile.CapturePointer(e.Pointer);
+        tile.CaptureMouse();
     }
 
-    private void ModuleTile_PointerMoved(object sender, PointerRoutedEventArgs e)
+    private void ModuleTile_MouseMove(object sender, MouseEventArgs e)
     {
         if (_draggedModuleId is null)
         {
             return;
         }
 
-        var point = e.GetCurrentPoint(EffectChainPanel);
-        if (!point.Properties.IsLeftButtonPressed)
+        if (e.LeftButton != MouseButtonState.Pressed)
         {
             ClearModuleDragState();
             return;
         }
 
-        if (!_isModuleDragging && Math.Abs(point.Position.X - _dragStartPoint.X) < 12)
+        var point = e.GetPosition(EffectChainPanel);
+        if (!_isModuleDragging && Math.Abs(point.X - _dragStartPoint.X) < 12)
         {
             return;
         }
@@ -1403,7 +1389,7 @@ public partial class MainWindow : Window
         }
 
         _isModuleDragging = true;
-        var laneTarget = GetDivMixLaneInsertionTarget(point.Position);
+        var laneTarget = GetDivMixLaneInsertionTarget(point);
         if (_dragInsertLane != laneTarget.Lane
             || _dragInsertBeforeModuleId != laneTarget.ModuleId
             || _dragInsertLaneAfterLastModule != laneTarget.AfterLast)
@@ -1420,7 +1406,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var target = GetModuleInsertionTarget(point.Position.X);
+        var target = GetModuleInsertionTarget(point.X);
         if (_dragInsertBeforeModuleId != target.ModuleId || _dragInsertAfterLastModule != target.AfterLast)
         {
             _dragInsertBeforeModuleId = target.ModuleId;
@@ -1431,7 +1417,7 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void ModuleTile_PointerReleased(object sender, PointerRoutedEventArgs e)
+    private void ModuleTile_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         var wasDragging = _isModuleDragging;
         var moved = false;
@@ -1464,11 +1450,21 @@ public partial class MainWindow : Window
         }
 
         ClearModuleDragState(rebuildChain: wasDragging);
+        if (!wasDragging)
+        {
+            SelectModuleTile(sender);
+        }
     }
 
-    private void ModuleTile_PointerCanceled(object sender, PointerRoutedEventArgs e) => ClearModuleDragState();
+    private void ModuleTile_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            ClearModuleDragState();
+        }
+    }
 
-    private void ModuleTile_Tapped(object sender, TappedRoutedEventArgs e)
+    private void SelectModuleTile(object sender)
     {
         if (_isModuleDragging || sender is not Border { Tag: string moduleId } || !_modules.TryGetValue(moduleId, out var module))
         {
@@ -1483,7 +1479,6 @@ public partial class MainWindow : Window
         if (isDoubleTap)
         {
             ToggleModule(module);
-            e.Handled = true;
             return;
         }
 
@@ -1525,7 +1520,7 @@ public partial class MainWindow : Window
             }
 
             var transform = tile.TransformToVisual(EffectChainPanel);
-            var left = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0)).X;
+            var left = transform.Transform(new Point(0, 0)).X;
             var right = left + tile.ActualWidth;
             var midpoint = left + tile.ActualWidth / 2;
 
@@ -1661,7 +1656,7 @@ public partial class MainWindow : Window
 
     private void ClearModuleDragState(bool rebuildChain = true)
     {
-        _dragSourceTile?.ReleasePointerCaptures();
+        _dragSourceTile?.ReleaseMouseCapture();
         _dragSourceTile = null;
         _draggedModuleId = null;
         _dragInsertBeforeModuleId = null;
@@ -1748,7 +1743,7 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private (string? Lane, string? ModuleId, bool AfterLast) GetDivMixLaneInsertionTarget(global::Windows.Foundation.Point point)
+    private (string? Lane, string? ModuleId, bool AfterLast) GetDivMixLaneInsertionTarget(Point point)
     {
         if (_draggedModuleId is "DIV" or "PrA" or "PrB" or "MIX")
         {
@@ -1768,7 +1763,7 @@ public partial class MainWindow : Window
         return (null, null, false);
     }
 
-    private (string Lane, string ModuleId, bool AfterLast) GetLaneInsertionTarget(string lane, StackPanel panel, global::Windows.Foundation.Point point)
+    private (string Lane, string ModuleId, bool AfterLast) GetLaneInsertionTarget(string lane, StackPanel panel, Point point)
     {
         string? lastModuleId = null;
         foreach (var tile in panel.Children.OfType<Border>())
@@ -1780,7 +1775,7 @@ public partial class MainWindow : Window
 
             lastModuleId = moduleId;
             var transform = tile.TransformToVisual(EffectChainPanel);
-            var left = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0)).X;
+            var left = transform.Transform(new Point(0, 0)).X;
             var midpoint = left + tile.ActualWidth / 2;
             if (point.X < midpoint)
             {
@@ -1792,10 +1787,10 @@ public partial class MainWindow : Window
         return (lane, lastModuleId ?? anchor, true);
     }
 
-    private bool IsPointInside(FrameworkElement element, global::Windows.Foundation.Point point)
+    private bool IsPointInside(FrameworkElement element, Point point)
     {
         var transform = element.TransformToVisual(EffectChainPanel);
-        var topLeft = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
+        var topLeft = transform.Transform(new Point(0, 0));
         return point.X >= topLeft.X
             && point.X <= topLeft.X + element.ActualWidth
             && point.Y >= topLeft.Y
@@ -2180,8 +2175,6 @@ public partial class MainWindow : Window
         const int columns = 3;
         var grid = new Grid
         {
-            ColumnSpacing = 24,
-            RowSpacing = 8,
             Margin = new Thickness(0, 0, 0, 14)
         };
 
@@ -2212,8 +2205,6 @@ public partial class MainWindow : Window
         const int columns = 6;
         var grid = new Grid
         {
-            ColumnSpacing = 12,
-            RowSpacing = 12,
             Margin = new Thickness(0, 0, 0, 8)
         };
 
@@ -2244,7 +2235,6 @@ public partial class MainWindow : Window
         var row = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
             VerticalAlignment = VerticalAlignment.Center
         };
 
@@ -2315,7 +2305,6 @@ public partial class MainWindow : Window
 
         var channels = new Grid
         {
-            ColumnSpacing = 24,
             Margin = new Thickness(0, 14, 0, 0)
         };
         channels.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(360) });
@@ -2344,12 +2333,12 @@ public partial class MainWindow : Window
 
     private StackPanel CreateDivChannelPanel(string title, string dynamicId, string sensId, string filterId, string cutoffId)
     {
-        var panel = new StackPanel { Spacing = 8 };
+        var panel = new StackPanel();
         panel.Children.Add(new TextBlock
         {
             Text = title,
             FontSize = 18,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 4)
         });
 
@@ -2703,12 +2692,15 @@ public partial class MainWindow : Window
 
     private static string CreateLogFilePath()
     {
-        var logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+        var logDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "GT-001",
+            "logs");
         Directory.CreateDirectory(logDirectory);
         return Path.Combine(logDirectory, $"gt001-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.log");
     }
 
-    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    private void MainWindow_Closed(object? sender, EventArgs args)
     {
         _isConnected = false;
         _connectSequenceCts?.Cancel();

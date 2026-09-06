@@ -14,12 +14,22 @@ This is a simple manual release checklist for GitHub.
 ```powershell
 dotnet restore GT001.Editor.sln --configfile NuGet.Config
 dotnet test GT001.Editor.sln --no-restore
-dotnet publish src\GT001.Editor.App\GT001.Editor.App.csproj -c Release -r win-x64 --self-contained true -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true -p:DebugType=none -p:DebugSymbols=false -o artifacts\release\GT001.Editor-vX.Y.Z-win-x64
+dotnet publish src\GT001.Editor.App\GT001.Editor.App.csproj -c Release -r win-x64 --self-contained false -p:DebugType=none -p:DebugSymbols=false -o artifacts\release\GT001.Editor-vX.Y.Z-win-x64
 ```
 
-Zip the contents of the release folder for the GitHub release.
+Upload the installer produced below to the GitHub release. The framework-dependent publish folder is an intermediate build artifact, not a release asset.
 
-For local installs, copy the release folder contents to `C:\Apps\GT-001`. The app install folder is only a publish destination; builds should run from the source checkout.
+## Build the Windows Installer
+
+Install [Inno Setup](https://jrsoftware.org/isinfo.php) on the release machine, then run:
+
+```powershell
+.\scripts\build-installer.ps1
+```
+
+The script publishes a framework-dependent build and produces `artifacts\installer\GT001.Editor-Setup-X.Y.Z-win-x64.exe`. The target machine must have the .NET 10 Windows Desktop Runtime installed. The installer requires elevation because it installs to `C:\Program Files\GT-001`; it preserves `%LocalAppData%\GT-001` on upgrades and uninstall.
+
+For local installs, copy the release folder contents to `C:\Program Files\GT-001`. The app install folder is only a publish destination; builds should run from the source checkout. User settings and logs belong in `%LocalAppData%\GT-001`, never in the install folder.
 
 ## Release Notes Template
 

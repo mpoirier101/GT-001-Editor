@@ -1,17 +1,15 @@
-using Microsoft.UI.Xaml;
 using System;
 using System.IO;
+using System.Windows;
+using System.Windows.Threading;
 
 namespace GT001.Editor.App;
 
 public partial class App : Application
 {
-    private Window? _window;
-
     public App()
     {
-        UnhandledException += OnUnhandledException;
-
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
         try
         {
             WriteStartupLog("App initializing.");
@@ -25,14 +23,21 @@ public partial class App : Application
         }
     }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs args)
     {
+        WriteStartupLog($"Unhandled exception: {args.Exception}");
+    }
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
         try
         {
             WriteStartupLog("Launch requested.");
-            _window = new MainWindow();
+            var window = new MainWindow();
             WriteStartupLog("MainWindow created.");
-            _window.Activate();
+            MainWindow = window;
+            window.Show();
             WriteStartupLog("MainWindow activated.");
         }
         catch (Exception ex)
@@ -42,16 +47,14 @@ public partial class App : Application
         }
     }
 
-    private static void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs args)
-    {
-        WriteStartupLog($"Unhandled exception: {args.Exception}");
-    }
-
     private static void WriteStartupLog(string message)
     {
         try
         {
-            var logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+            var logDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "GT-001",
+                "logs");
             Directory.CreateDirectory(logDirectory);
             var logPath = Path.Combine(logDirectory, "startup.log");
             File.AppendAllText(logPath, $"{DateTimeOffset.Now:O}\t{message}{Environment.NewLine}");
